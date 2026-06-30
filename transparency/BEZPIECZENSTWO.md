@@ -1,6 +1,6 @@
 # Bezpieczenstwo i transparentnosc
 
-Ten dokument opisuje, co wiadomo o publicznym wydaniu programu Video And Sound Downloader Pro v6.5.6.
+Ten dokument opisuje, co wiadomo o publicznych wydaniach programu Video And Sound Downloader Pro publikowanych w tym repozytorium. Najnowsze wydanie opisane w plikach weryfikacyjnych to v7.0.7.
 
 ## Co robi program
 
@@ -12,18 +12,19 @@ Program:
 - zapisuje pobrane pliki w folderze wybranym przez uzytkownika,
 - uzywa FFmpeg do konwersji oraz scalania audio i wideo,
 - pokazuje logi pobierania w oknie programu,
+- w wersji v7.0.7 udostepnia nowy panel GUI, przelacznik jezyka PL/EN, tryb pobierania z Facebooka oraz przycisk Fix do lokalnej naprawy lub aktualizacji yt-dlp,
 - nie wymaga logowania do programu,
 - nie prosi o hasla do kont uzytkownika,
 - nie publikuje prywatnych plikow uzytkownika.
 
 ## Co zawiera publiczne repozytorium
 
-To repozytorium publikacyjne nie zawiera pelnego kodu zrodlowego aplikacji. Zawiera tylko materialy pomocnicze do weryfikacji publicznego wydania:
+To repozytorium publikacyjne nie zawiera pelnego kodu zrodlowego aplikacji. Zawiera tylko materialy pomocnicze do weryfikacji publicznych wydan:
 
-- plik EXE w sekcji Releases,
-- sume kontrolna SHA256 pliku EXE,
-- fragment rzeczywistego kodu programu pokazujacy sposob uruchamiania yt-dlp,
-- obraz pokazujacy aktualny wyglad aplikacji.
+- pliki EXE w sekcji Releases,
+- sumy kontrolne SHA256 plikow EXE i obrazow GUI,
+- fragmenty rzeczywistego kodu programu pokazujace sposob uruchamiania yt-dlp,
+- obrazy pokazujace wyglad aplikacji dla danego wydania.
 
 ## Jak sprawdzic pobrany plik
 
@@ -32,10 +33,14 @@ Po pobraniu pliku EXE mozna porownac jego sume SHA256 z plikiem `SHA256SUMS.txt`
 W PowerShell:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Video_And_Sound_Downloader_Pro_v6.5.6.exe
+Get-FileHash -Algorithm SHA256 .\Video_And_Sound_Downloader_Pro_v7.0.7.exe
 ```
 
 Otrzymany hash powinien byc taki sam jak w `transparency/SHA256SUMS.txt`.
+
+## Ciaglosc wydan
+
+Poprzednie wydania pozostaja dostepne w sekcji Releases. Plik `SHA256SUMS.txt` zachowuje wpisy dla starszych wersji i dopisuje kolejne sumy dla nowych wydan, aby mozna bylo sprawdzic zarowno aktualna, jak i poprzednia paczke programu.
 
 ## Uwaga
 
