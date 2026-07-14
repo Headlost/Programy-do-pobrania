@@ -4021,6 +4021,17 @@ class VideoDownloaderApp(ctk.CTk):
         output_template = output_template or os.path.join(folder, "%(title).200B.%(ext)s")
         format_selector = self.build_video_format_selector(video_format, video_quality, subtitle_info)
 
+        # A direct media URL may be a perfectly valid video even when yt-dlp cannot
+        # determine its height or codecs before downloading it.  The strict
+        # selectors above intentionally reject incomplete formats, but they also
+        # rejected such direct MP4 files (for example Interia's CDN).  Keep the
+        # strict choices first and add a fallback only for an already discovered
+        # direct media URL.  validate_recent_video_download() still verifies that
+        # the resulting file contains decodable video and audio streams.
+        if self.is_direct_media_url(link):
+            fallback_choice = "worst" if video_quality == "Mini" else "best"
+            format_selector += f"/{fallback_choice}[ext={video_format}]/{fallback_choice}"
+
         command = [
             resolve_tool_command("yt-dlp"),
             "--newline",
