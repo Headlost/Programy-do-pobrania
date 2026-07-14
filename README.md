@@ -1,18 +1,28 @@
 # Programy do pobrania
 
-Publiczne repozytorium z wydaniami programow do pobrania.
+Publiczne repozytorium z wydaniami programu Video And Sound Downloader Pro.
 
-To repozytorium jest repozytorium publikacyjnym dla gotowych wydań programu. Od wersji v7.0.7 zawiera takze rozszerzony snapshot kodu zrodlowego do weryfikacji transparentnosci wydania.
+Repozytorium zawiera:
 
 - gotowe wydania programu w sekcji Releases,
-- podstawowe informacje o bezpieczenstwie,
-- sumy kontrolne SHA256,
-- rozszerzony kod zrodlowy v7.0.7 w `transparency/source-disclosure-v7.0.7/`,
-- paczke ZIP z tym kodem: `transparency/source-disclosure-v7.0.7.zip`,
-- starsze fragmenty rzeczywistego kodu pokazujace sposob pobierania plikow przez yt-dlp,
-- materialy pokazujace aktualny wyglad programu.
+- informacje o bezpieczeństwie i sumy SHA-256,
+- rozszerzone snapshoty kodu źródłowego do weryfikacji transparentności,
+- skrócone podglądy najważniejszej logiki,
+- materiały pokazujące wygląd kolejnych wersji.
 
-Najnowsze wydanie:
+## Najnowsze wydanie
+
+[Video And Sound Downloader Pro v8.0.0](https://github.com/Headlost/Programy-do-pobrania/releases/tag/v8.0.0) — nowy tryb WYKRYJ, bezpieczne pobieranie wielu materiałów, poprawiona obsługa playlist, trybów Mini, aktywnych transmisji oraz weryfikacja obrazu i dźwięku.
+
+Materiały transparentności v8.0.0 znajdują się w:
+
+- `transparency/source-disclosure-v8.0.0/`,
+- `transparency/source-disclosure-v8.0.0.zip`,
+- `transparency/source-preview-v8.0.0.py`,
+- `transparency/CHANGELOG_v8.0.0_vs_v7.0.7.md`,
+- `transparency/Aktualny.wyglad.aplikacji.do.pobierania.v8.0.0.PNG`.
+
+## Poprzednie wydanie
 
 [Video And Sound Downloader Pro v7.0.7](https://github.com/Headlost/Programy-do-pobrania/releases/tag/v7.0.7)
 
