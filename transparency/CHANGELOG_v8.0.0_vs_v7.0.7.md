@@ -75,7 +75,7 @@ Pełna lista zmian względem wersji v7.0.7
 12. Wydanie i pakowanie
 - Zaktualizowano numer programu oraz metadane pliku do 8.0.0.
 - Zaktualizowano skrypty uruchamiania, budowania i podpisywania oraz konfigurację PyInstaller.
-- Dołączono nowe zasoby graficzne, wymagane narzędzia yt-dlp, FFmpeg i FFprobe oraz paczkę Portable.
+- Dołączono nowe zasoby graficzne oraz wymagane narzędzia yt-dlp, FFmpeg i FFprobe.
 - Wydanie korzysta z yt-dlp 2026.07.04.
 
 Program należy wykorzystywać wyłącznie do materiałów, do których użytkownik posiada prawa lub zgodę na pobranie.
