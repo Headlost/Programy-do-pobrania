@@ -1,0 +1,4849 @@
+﻿# -*- coding: utf-8 -*-
+# YouTube Audio / Video Downloader GUI
+# Wersja 8.0.8: darmowa bez limitu czasu, rozszerzone tłumaczenia, Discover i poprawki ARTE
+# Plik .pyw uruchamia się bez czarnego okna konsoli.
+#
+# Używaj tylko do materiałów, do których masz prawa albo które wolno Ci pobrać zgodnie z regulaminem źródła.
+#
+# Copyright (C) 2026 Beniamin Żak
+#
+# Ten program jest wolnym oprogramowaniem: możesz go rozpowszechniać i/lub
+# modyfikować zgodnie z warunkami GNU General Public License opublikowanej
+# przez Free Software Foundation, w wersji 3 Licencji albo dowolnej późniejszej.
+# Szczegóły znajdziesz w pliku LICENSE-GPL-3.0.txt.
+
+import os
+import json
+import re
+import hashlib
+import hmac
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+import webbrowser
+from html.parser import HTMLParser
+from html import unescape as html_unescape
+from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
+
+
+def configure_tcl_tk_paths():
+    candidates = []
+
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        bundled_root = Path(sys._MEIPASS)
+        candidates.append((bundled_root / "_tcl_data", bundled_root / "_tk_data"))
+
+    python_root = Path(sys.executable).resolve().parent
+    candidates.append((python_root / "tcl" / "tcl8.6", python_root / "tcl" / "tk8.6"))
+
+    for tcl_dir, tk_dir in candidates:
+        if (tcl_dir / "init.tcl").exists() and tk_dir.exists():
+            os.environ["TCL_LIBRARY"] = str(tcl_dir)
+            os.environ["TK_LIBRARY"] = str(tk_dir)
+            return
+
+
+configure_tcl_tk_paths()
+
+
+def add_local_python_libraries():
+    if getattr(sys, "frozen", False):
+        return
+
+    app_dir = Path(__file__).resolve().parent
+    local_dirs = [
+        app_dir / ".runtime_deps_v8_0_8",
+        app_dir / ".runtime_deps_v8_0_0",
+        app_dir / ".runtime_deps_v6_5_6",
+        app_dir / ".runtime_deps_v6_5_5",
+        app_dir / ".runtime_deps_v6_0_5",
+        app_dir / ".runtime_deps_v6_0_1",
+        app_dir / ".runtime_deps_v6_0_0",
+        app_dir / ".build_tools_v8_0_8",
+        app_dir / ".build_tools_v8_0_0",
+        app_dir / ".build_tools_v6_5_6",
+        app_dir / ".build_tools_v6_5_5",
+        app_dir / ".build_tools_v6_0_5",
+        app_dir / ".build_tools_v6_0_1",
+        app_dir / ".build_tools_v6_0_0",
+    ]
+    local_paths = []
+    for path in local_dirs:
+        try:
+            customtkinter_init = path / "customtkinter" / "__init__.py"
+            if customtkinter_init.exists():
+                with customtkinter_init.open("rb") as handle:
+                    handle.read(1)
+                local_paths.append(str(path))
+        except OSError:
+            continue
+    for deps_path in reversed(local_paths):
+        if deps_path not in sys.path:
+            sys.path.insert(0, deps_path)
+
+
+add_local_python_libraries()
+
+import tkinter as tk
+from tkinter import filedialog, messagebox, ttk
+
+try:
+    import customtkinter as ctk
+    from PIL import Image
+    if not hasattr(ctk, "CTk"):
+        raise ImportError("Niepełna instalacja CustomTkinter - brakuje klasy CTk.")
+except (ModuleNotFoundError, ImportError):
+    root = tk.Tk()
+    root.withdraw()
+    messagebox.showerror(
+        "Brakuje biblioteki",
+        "Ta wersja programu wymaga biblioteki CustomTkinter.\n\n"
+        "Najprościej uruchom raz plik Uruchom_GUI_v8-0-8.bat albo zainstaluj:\n"
+        "pip install customtkinter\n\n"
+        "Jeśli stary folder zależności istnieje, ale program nadal pokazuje ten komunikat, "
+        "uruchom Uruchom_GUI_v8-0-8.bat - plik utworzy czysty folder .runtime_deps_v8_0_8.",
+    )
+    root.destroy()
+    raise SystemExit(1)
+
+
+APP_TITLE = "Video & Sound Downloader Pro"
+APP_VERSION = "8.0.8"
+APP_AUTHOR = "Beniamin Żak"
+APP_LICENSE = "GNU GPL v3.0 lub późniejsza"
+SUPPORT_URL = "https://buycoffee.to/beniamin-tv6"
+SUPPORT_URL_EN = "https://ko-fi.com/beniaminzak"
+PROJECT_REPO_URL = "https://github.com/Headlost/Programy-do-pobrania"
+LICENSE_FILE_NAME = "LICENSE-GPL-3.0.txt"
+APP_ICON_FILE_NAME = "app_icon.ico"
+APP_ICON_PNG_FILE_NAME = "app_icon.png"
+LICENSE_URL = "https://www.gnu.org/licenses/gpl-3.0.txt"
+YTDLP_ID = "yt-dlp.yt-dlp"
+FFMPEG_ID = "Gyan.FFmpeg"
+INSTALL_TIMEOUT_SECONDS = 240
+TOOLS_DIR_NAME = "tools"
+YTDLP_LATEST_RELEASE_API = "https://api.github.com/repos/yt-dlp/yt-dlp/releases/latest"
+YTDLP_LATEST_EXE_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe"
+MINI_VIDEO_MAX_BYTES = 20 * 1024 * 1024
+MINI_AUDIO_BITRATE = "64k"
+
+TRIAL_DAYS = 0
+TRIAL_BUILD_ID = "free-v8-0-8"
+TRIAL_BUILD_STARTED_AT = 0
+TRIAL_STATE_SECRET = "free-version-no-trial"
+
+TRIAL_DEFAULT_DAYS = 30
+TRIAL_MAX_DAYS = 365
+TRIAL_DAY_SECONDS = 24 * 60 * 60
+TRIAL_CLOCK_TOLERANCE_SECONDS = 10 * 60
+TRIAL_STATE_SCHEMA = 2
+TRIAL_STATE_FILE_NAME = "trial_state_v8_0_8.json"
+TRIAL_REGISTRY_KEY = r"Software\VideoAndSoundDownloaderPro"
+TRIAL_REGISTRY_VALUE_NAME = "trial_state_v8_0_8"
+TRIAL_EXPECTED_SIGNER_MARKERS = ("Beniamin_", "Code_Signing")
+SELF_INTEGRITY_BLOCK_STATUSES = {"HashMismatch", "NotSigned"}
+SUBTITLE_MODES = {"MP4", "WEB_SCAN"}
+
+DIRECT_MEDIA_EXTENSIONS = (
+    ".mp4", ".webm", ".mkv", ".mov", ".m4v", ".m3u8", ".mpd",
+    ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav", ".flac",
+    ".ts", ".m2ts", ".mts", ".3gp", ".avi", ".wmv", ".asf", ".f4v", ".flv",
+    ".oga", ".weba", ".mka", ".mp2", ".ac3", ".eac3", ".m3u", ".ism", ".ismv", ".isma",
+)
+SUBTITLE_LANGUAGE_PRIORITY_PL = [
+    ("pl", "polskim"),
+    ("en", "angielskim"),
+]
+SUBTITLE_LANGUAGE_PRIORITY_EN = [
+    ("en", "angielskim"),
+    ("pl", "polskim"),
+]
+SUBTITLE_FILE_EXTENSIONS = {".vtt", ".srt", ".ass", ".lrc"}
+STANDARD_DOWNLOAD_DOMAINS = (
+    "youtube.com",
+    "youtu.be",
+    "youtube-nocookie.com",
+)
+FACEBOOK_DOWNLOAD_DOMAINS = (
+    "facebook.com",
+    "fb.watch",
+)
+ARTE_DOWNLOAD_DOMAINS = ("arte.tv",)
+BROWSER_RETRY_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/126.0.0.0 Safari/537.36"
+)
+BROWSER_RETRY_ACCEPT_LANGUAGE = "pl-PL,pl;q=0.9,en-US;q=0.8,en;q=0.7"
+
+
+class MediaHTMLParser(HTMLParser):
+    """Collects declared media sources without executing page scripts."""
+
+    def __init__(self, page_url):
+        super().__init__(convert_charrefs=True)
+        self.page_url = page_url
+        self.sources = []
+        self.links = []
+        self.page_title = ""
+        self._in_title = False
+
+    def handle_starttag(self, tag, attrs):
+        values = {str(key).lower(): value for key, value in attrs if value}
+        tag = tag.lower()
+        if tag == "title":
+            self._in_title = True
+        candidates = []
+        if tag in {"video", "source", "track"}:
+            candidates.extend((values.get("src"), values.get("data-src")))
+        if tag == "meta" and values.get("property", "").lower() in {
+            "og:video", "og:video:url", "og:video:secure_url", "twitter:player:stream"
+        }:
+            candidates.append(values.get("content"))
+        if tag == "a" and values.get("href"):
+            self.links.append(urljoin(self.page_url, values["href"].strip()))
+        for candidate in candidates:
+            if candidate:
+                self.sources.append(urljoin(self.page_url, candidate.strip()))
+
+    def handle_endtag(self, tag):
+        if tag.lower() == "title":
+            self._in_title = False
+
+    def handle_data(self, data):
+        if self._in_title:
+            self.page_title += data.strip()
+
+
+def get_resource_path(file_name):
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        return Path(sys._MEIPASS) / file_name
+    return Path(__file__).resolve().parent / file_name
+
+def get_default_save_dir():
+    home = Path.home()
+    candidates = [
+        home / "Downloads",
+        home / "Pobrane",
+        home / "Desktop",
+        home / "Pulpit",
+        home,
+    ]
+    for folder in candidates:
+        if folder.exists() and folder.is_dir():
+            return str(folder)
+    return str(home)
+
+AUDIO_PRESETS = [
+    ("MP3   320 kbps", {"kind": "audio", "format": "mp3", "audio_quality": "320k"}),
+    ("MP3   192 kbps", {"kind": "audio", "format": "mp3", "audio_quality": "192k"}),
+    ("MP3 Mini do testów", {"kind": "audio", "format": "mp3", "audio_quality": MINI_AUDIO_BITRATE, "mini": True}),
+    ("M4A   najlepsza", {"kind": "audio", "format": "m4a", "audio_quality": "0"}),
+    ("WAV   bez kompresji", {"kind": "audio", "format": "wav", "audio_quality": "0"}),
+    ("OPUS Komunikacja niskich opóźnień", {"kind": "audio", "format": "opus", "audio_quality": "0"}),
+]
+
+VIDEO_PRESETS = [
+    ("MP4   Najlepsza", {"kind": "video", "format": "mp4", "quality": "Najlepsza"}),
+    ("MP4   1080p Full HD", {"kind": "video", "format": "mp4", "quality": "1080p"}),
+    ("MP4   720p HD", {"kind": "video", "format": "mp4", "quality": "720p"}),
+    ("MP4   480p", {"kind": "video", "format": "mp4", "quality": "480p"}),
+    ("MP4 Mini do testów", {"kind": "video", "format": "mp4", "quality": "Mini", "mini": True}),
+    ("MKV Blu-ray, HEVC", {"kind": "video", "format": "mkv", "quality": "Najlepsza"}),
+    ("WEBM Android TV", {"kind": "video", "format": "webm", "quality": "Najlepsza"}),
+]
+
+QUALITY_PRESETS = dict(AUDIO_PRESETS + VIDEO_PRESETS)
+MODE_QUALITY_OPTIONS = {
+    "MP3": [label for label, _ in AUDIO_PRESETS],
+    "MP4": [label for label, _ in VIDEO_PRESETS],
+    "PLAYLISTA": [label for label, _ in AUDIO_PRESETS + VIDEO_PRESETS],
+    "WEB_SCAN": [label for label, _ in AUDIO_PRESETS + VIDEO_PRESETS],
+}
+MODE_DEFAULT_QUALITY = {
+    "MP3": "MP3   320 kbps",
+    "MP4": "MP4   1080p Full HD",
+    "PLAYLISTA": "MP3   320 kbps",
+    "WEB_SCAN": "MP4   720p HD",
+}
+
+LANGUAGE_LABELS = {
+    "PL": "Polski",
+    "EN": "English",
+}
+
+QUALITY_LABELS_EN = {
+    "MP3   320 kbps": "MP3   320 kbps",
+    "MP3   192 kbps": "MP3   192 kbps",
+    "MP3 Mini do testów": "MP3 Mini for tests",
+    "M4A   najlepsza": "M4A   best",
+    "WAV   bez kompresji": "WAV   uncompressed",
+    "OPUS Komunikacja niskich opóźnień": "OPUS Low-latency communication",
+    "MP4   Najlepsza": "MP4   Best",
+    "MP4   1080p Full HD": "MP4   1080p Full HD",
+    "MP4   720p HD": "MP4   720p HD",
+    "MP4   480p": "MP4   480p",
+    "MP4 Mini do testów": "MP4 Mini for tests",
+    "MKV Blu-ray, HEVC": "MKV Blu-ray, HEVC",
+    "WEBM Android TV": "WEBM Android TV",
+}
+QUALITY_LABELS_PL_BY_EN = {value: key for key, value in QUALITY_LABELS_EN.items()}
+
+UI_TEXT_EN = {
+    "Pobieraj audio, wideo i playlisty z jednego panelu": "Download audio, video and playlists from one panel",
+    "Wybierz język": "Choose language",
+    "Link:": "Link:",
+    "Wklej link z YouTube, Facebooka albo innej obsługiwanej strony...": "Paste a link from YouTube, Facebook or another supported site...",
+    "Wybierz opcję:": "Choose option:",
+    "Napisy do filmu": "Video subtitles",
+    "Pobierz dźwięk": "Download audio",
+    "Pobierz wideo": "Download video",
+    "Pobierz całą listę": "Download full list",
+    "PLAYLISTA": "PLAYLIST",
+    "Jakość / Format:": "Quality / Format:",
+    "Zapisz do:": "Save to:",
+    "↓   POBIERZ": "↓   DOWNLOAD",
+    "↓   POBIERZ DŹWIĘK": "↓   DOWNLOAD AUDIO",
+    "↓   POBIERZ WIDEO": "↓   DOWNLOAD VIDEO",
+    "↓   POBIERZ PLAYLISTĘ": "↓   DOWNLOAD PLAYLIST",
+    "↓   POBIERZ Z FACEBOOKA": "↓   DOWNLOAD FROM FACEBOOK",
+    "WYKRYJ": "DISCOVER",
+    "Wykryj audio lub wideo": "Discover audio or video",
+    "WYKRYJ I POBIERZ": "DISCOVER AND DOWNLOAD",
+    "Pobrane": "Downloads",
+    "Wsparcie": "Support",
+    "O mnie": "About",
+    "Najpierw polskie, w razie braku angielskie. Napisy będą w filmie.": (
+        "Polish first, English if missing. Subtitles will be embedded in the video."
+    ),
+    "Gotowe.": "Ready.",
+    "OK": "OK",
+    "TAK": "YES",
+    "NIE": "NO",
+    "ANULUJ": "CANCEL",
+    "TRIAL WYGASŁ": "TRIAL EXPIRED",
+}
+
+MESSAGE_EXACT_EN = {
+    "Brakuje biblioteki": "Missing library",
+    "Ta wersja programu wymaga biblioteki CustomTkinter.\n\nNajprościej uruchom raz plik Uruchom_GUI_v8-0-8.bat albo zainstaluj:\npip install customtkinter\n\nJeśli stary folder zależności istnieje, ale program nadal pokazuje ten komunikat, uruchom Uruchom_GUI_v8-0-8.bat - plik utworzy czysty folder .runtime_deps_v8_0_8.": "This version of the program requires the CustomTkinter library.\n\nThe easiest way is to run Uruchom_GUI_v8-0-8.bat once or install:\npip install customtkinter\n\nIf the old dependency folder exists but the program still shows this message, run Uruchom_GUI_v8-0-8.bat - it will create a clean .runtime_deps_v8_0_8 folder.",
+    "Gotowe.": "Ready.",
+    "Schowek jest pusty": "Clipboard is empty",
+    "Nie znaleziono tekstu do wklejenia.": "No text was found to paste.",
+    "O mnie": "About",
+    "Program został zablokowany": "Program blocked",
+    "Program został zablokowany. Pobieranie nie jest dostępne.": "The program has been blocked. Downloads are not available.",
+    "Program został zablokowany przez kontrolę integralności.": "The program has been blocked by the integrity check.",
+    "Program zablokowany: kontrola integralności pliku EXE nie powiodła się.": "Program blocked: EXE integrity check failed.",
+    "Czas testów tej wersji programu minął.\n\nPobieranie zostało zablokowane.": "The test period for this program version has expired.\n\nDownloading has been blocked.",
+    "Plik programu nie przechodzi kontroli podpisu albo został zmieniony po kompilacji.\n\nPobieranie zostało zablokowane. Uruchom oryginalny, podpisany plik EXE.": "The program file does not pass signature verification or was changed after compilation.\n\nDownloading has been blocked. Run the original signed EXE file.",
+    "Program jest dostępny bez limitu czasu.": "The program is available without a time limit.",
+    "Na liczne prośby program został udostępniony wszystkim użytkownikom bez limitu czasu. Jeśli doceniasz projekt, możesz przybić wirtualną piątkę, klikając przycisk Wsparcie.": "By popular request, the program is available to all users without a time limit. If you appreciate the project, you can give a virtual high five by clicking Support.",
+    "Mini: kończę kompresję...": "Mini: finishing compression...",
+    "Błąd: sprawdź szczegóły w logu.": "Error: check the log for details.",
+    "Sprawdzam napisy do filmu...": "Checking video subtitles...",
+    "Napisy: sprawdzam dostępność PL, potem EN.": "Subtitles: checking PL availability first, then EN.",
+    "Napisy: ARTE - wybieram wariant wideo zgodny z językiem napisów.": "Subtitles: ARTE - selecting the video variant that matches the subtitle language.",
+    "Napisy: wtapiam napisy w obraz filmu...": "Subtitles: burning subtitles into the video image...",
+    "Napisy: kończę wtapianie napisów...": "Subtitles: finishing subtitle burn-in...",
+    "Napisy: napisy zostały wtopione w obraz filmu.": "Subtitles: subtitles were burned into the video image.",
+    "Napisy: nie udało się wtopić napisów w obraz filmu.": "Subtitles: could not burn subtitles into the video image.",
+    "Napisy: nie znaleziono pobranego pliku napisów do wtopienia.": "Subtitles: could not find the downloaded subtitle file to burn in.",
+    "Napisy: nie udało się potwierdzić ścieżki pobranego pliku.": "Subtitles: could not confirm the downloaded file path.",
+    "Napisy: nie udało się sprawdzić listy napisów dla tego filmu.": "Subtitles: could not check the subtitle list for this video.",
+    "Napisy: nie znaleziono zwykłych ani automatycznych napisów po polsku lub angielsku.": "Subtitles: no regular or automatic Polish or English subtitles were found.",
+    "Napisy: nie znaleziono zwykłych napisów po polsku lub angielsku.": "Subtitles: no regular Polish or English subtitles were found.",
+    "Napisy: nie znaleziono napisów po polsku ani po angielsku.": "Subtitles: no Polish or English subtitles were found.",
+    "Zostaną zintegrowane z filmem.": "They will be embedded into the video.",
+    "Napisy były wykryte, ale nie udało się ich pobrać lub zintegrować. Film został pobrany bez napisów.": "Subtitles were detected, but could not be downloaded or embedded. The video was downloaded without subtitles.",
+    "Napisy były dostępne i zostały zintegrowane z filmem.": "Subtitles were available and embedded in the video.",
+    "W tym filmie nie znaleziono napisów po polsku ani po angielsku.": "No Polish or English subtitles were found for this video.",
+    "Napisy były dostępne, ale nie zostały scalone z filmem.": "Subtitles were available, but were not embedded into the video.",
+    "Napisy scalone:": "Subtitles burned in:",
+    "Mini: nie udało się skompresować pliku.": "Mini: could not compress the file.",
+    "bez ponownej kompresji": "without recompression",
+    "Mini: nie udało się odczytać długości pliku, nie mogę bezpiecznie obliczyć kompresji.": "Mini: could not read the file duration, so compression cannot be calculated safely.",
+    "Mini: kompresuję plik do maks. 20 MB...": "Mini: compressing file to max. 20 MB...",
+    "Mini: to nie jest aktualizacja programu, tylko kompresja pliku przez FFmpeg.": "Mini: this is not a program update, only file compression with FFmpeg.",
+    "Mini: ta próba kompresji nie powiodła się.": "Mini: this compression attempt failed.",
+    "Mini: żadna próba kompresji nie zakończyła się poprawnie.": "Mini: no compression attempt finished successfully.",
+    "Mini: nie udało się ustalić ścieżki pobranego pliku.": "Mini: could not determine the downloaded file path.",
+    "Napisy: w folderze został sam film z osadzonymi napisami.": "Subtitles: only the video with embedded subtitles remains in the folder.",
+    "Program nie jest kompletny. Pobierz ponownie pełną paczkę.": "The program is incomplete. Download the full package again.",
+    "Gotowe. Wszystko jest gotowe, możesz rozpocząć pobieranie.": "Ready. Everything is prepared, you can start downloading.",
+    "OK: wszystko gotowe do pobierania.": "OK: everything is ready for downloading.",
+    "Proces trwa": "Process running",
+    "Poczekaj na zakończenie obecnej operacji albo użyj STOP.": "Wait for the current operation to finish or use STOP.",
+    "Fix: sprawdzam wersję yt-dlp...": "Fix: checking yt-dlp version...",
+    "Fix: wersja EXE nie modyfikuje własnych plików programu.": "Fix: the EXE version does not modify its own program files.",
+    "Fix: nie znaleziono yt-dlp ani winget do automatycznej instalacji.": "Fix: yt-dlp or winget was not found for automatic installation.",
+    "Fix: uruchamiam aktualizację yt-dlp.": "Fix: starting yt-dlp update.",
+    "Fix: próbuję aktualizacji yt-dlp przez winget.": "Fix: trying yt-dlp update through winget.",
+    "Fix: przygotowano aktualizowalną kopię yt-dlp w folderze danych aplikacji.": "Fix: prepared an updatable yt-dlp copy in the app data folder.",
+    "Fix: aktualizacja działa od razu w lokalnym projekcie .pyw.": "Fix: the update works immediately in the local .pyw project.",
+    "Fix: aktualizacja działa od razu w tej kopii programu.": "Fix: the update works immediately in this copy of the program.",
+    "Fix: przy kolejnym buildzie ta wersja zostanie scalona z EXE przez Kompiluj_EXE_v8-0-8.bat.": "Fix: during the next build this version will be bundled into the EXE by Kompiluj_EXE_v8-0-8.bat.",
+    "Fix: wykryto problem. Pobierz nową wersję programu z GitHuba.": "Fix: a problem was detected. Download a new version from GitHub.",
+    "Fix: w wersji EXE nie aktualizuję plików programu lokalnie.": "Fix: in the EXE version, program files are not updated locally.",
+    "Nie znaleziono komponentu yt-dlp w tej paczce programu.": "The yt-dlp component was not found in this program package.",
+    "Ostatni błąd pobierania wygląda na problem po stronie yt-dlp albo zmian w serwisie.": "The last download error looks like an yt-dlp issue or a service-side change.",
+    "Wykryto problem z komponentem yt-dlp.": "A problem with the yt-dlp component was detected.",
+    "Fix: sprawdzam podstawowe błędy...": "Fix: checking basic errors...",
+    "Fix: sprawdzam podstawowe błędy.": "Fix: checking basic errors.",
+    "Fix przerwany przez użytkownika.": "Fix stopped by the user.",
+    "Fix: przerwany przez użytkownika.": "Fix: stopped by the user.",
+    "Sprawdzanie nie wykryło problemów.": "The check did not detect any problems.",
+    "Wykryto problem z yt-dlp.": "A problem with yt-dlp was detected.",
+    "Wymagana jest aktualizacja bazy/API.": "A database/API update is required.",
+    "Po potwierdzeniu zostanie przeprowadzona lokalna aktualizacja projektu przed dystrybucją.": "After confirmation, a local project update will be performed before distribution.",
+    "Po potwierdzeniu zostanie pobrana lokalna aktualizacja yt-dlp.": "After confirmation, a local yt-dlp update will be downloaded.",
+    "Fix yt-dlp": "Fix yt-dlp",
+    "Wykryto problem z yt-dlp.\n\nWymagana jest aktualizacja bazy/API.\nPo potwierdzeniu zostanie przeprowadzona lokalna aktualizacja yt-dlp w projekcie .pyw przed dystrybucją.\n\nCzy rozpocząć aktualizację?": "A problem with yt-dlp was detected.\n\nA database/API update is required.\nAfter confirmation, a local yt-dlp update will be performed in the .pyw project before distribution.\n\nStart the update?",
+    "Wykryto problem z yt-dlp.\n\nWymagana jest aktualizacja bazy/API.\nPo potwierdzeniu zostanie przeprowadzona lokalna aktualizacja yt-dlp w folderze danych aplikacji. Program będzie jej używał od razu, bez modyfikowania własnego pliku EXE.\n\nCzy rozpocząć aktualizację?": "A problem with yt-dlp was detected.\n\nA database/API update is required.\nAfter confirmation, a local yt-dlp update will be installed in the app data folder. The program will use it immediately without modifying its own EXE file.\n\nStart the update?",
+    "Aktualizacja anulowana.": "Update cancelled.",
+    "Fix: użytkownik anulował aktualizację.": "Fix: the user cancelled the update.",
+    "Fix: aktualizuję yt-dlp...": "Fix: updating yt-dlp...",
+    "Aktualizacja zakończyła się powodzeniem.": "Update completed successfully.",
+    "Aktualizacja yt-dlp nie powiodła się.": "yt-dlp update failed.",
+    "Fix: aktualizacja yt-dlp nie powiodła się. Szczegóły są powyżej w logu.": "Fix: yt-dlp update failed. Details are above in the log.",
+    "Aktualizacja yt-dlp nie powiodła się. Sprawdź log.": "yt-dlp update failed. Check the log.",
+    "Program nie jest gotowy": "Program is not ready",
+    "Ta kopia programu nie zawiera wszystkich plików potrzebnych do pobierania.\n\nPobierz ponownie pełną paczkę programu od autora.": "This program copy does not contain all files required for downloading.\n\nDownload the full package from the author again.",
+    "Brak komponentów": "Missing components",
+    "Brakuje yt-dlp lub FFmpeg.\nAutomatyczna instalacja jest przygotowana dla Windows z winget.": "yt-dlp or FFmpeg is missing.\nAutomatic installation is prepared for Windows with winget.",
+    "Brak winget": "Missing winget",
+    "Nie znaleziono winget. Zainstaluj yt-dlp i FFmpeg ręcznie albo zaktualizuj App Installer.": "winget was not found. Install yt-dlp and FFmpeg manually or update App Installer.",
+    "Wymagana instalacja": "Installation required",
+    "Instalacja anulowana. Brak wymaganych komponentów.": "Installation cancelled. Required components are missing.",
+    "Użytkownik nie wyraził zgody na instalację.": "The user did not agree to installation.",
+    "Może pojawić się okno zgody systemu Windows. Nie zamykaj programu.": "A Windows consent window may appear. Do not close the program.",
+    "Instalacja trwa zbyt długo": "Installation is taking too long",
+    "Komponenty są gotowe.": "Components are ready.",
+    "Uruchom ponownie program": "Restart the program",
+    "Instalacja została zakończona, ale Windows może odświeżyć ścieżki PATH dopiero po ponownym uruchomieniu programu.\n\nZamknij aplikację i otwórz ją ponownie.": "Installation has finished, but Windows may refresh PATH only after restarting the program.\n\nClose the app and open it again.",
+    "Brak linku": "Missing link",
+    "Wklej link do filmu lub materiału.": "Paste a link to a video or media item.",
+    "Błędny folder": "Invalid folder",
+    "Wybierz poprawny folder zapisu.": "Choose a valid save folder.",
+    "Tryb playlisty: program pobierze całą listę.": "Playlist mode: the program will download the full list.",
+    "Uwaga - wykryto playlistę": "Attention - playlist detected",
+    "Pobieranie anulowane.": "Download cancelled.",
+    "Anulowano po wykryciu playlisty.": "Cancelled after detecting a playlist.",
+    "Użytkownik wybrał pobranie całej playlisty.": "The user chose to download the full playlist.",
+    "Użytkownik wybrał pobranie tylko pojedynczego utworu.": "The user chose to download only a single track.",
+    "Brak formatu": "Missing format",
+    "Wybierz jakość albo format pobierania.": "Choose the download quality or format.",
+    "nieznany": "unknown",
+    "FFmpeg - przetwarzanie/kompresja pliku": "FFmpeg - file processing/compression",
+    "yt-dlp - aktualizacja": "yt-dlp - update",
+    "yt-dlp - pobieranie": "yt-dlp - download",
+    "winget - instalacja/aktualizacja komponentu": "winget - component installation/update",
+    "Pobieranie przerwane.": "Download interrupted.",
+    "Pobieranie i konwersja audio...": "Downloading and converting audio...",
+    "Start pobierania audio...": "Starting audio download...",
+    "Pobieranie przerwane przez użytkownika.": "Download stopped by the user.",
+    "Przerwano": "Stopped",
+    "Pobieranie zostało zatrzymane.": "Download has been stopped.",
+    "Gotowe. Plik audio został zapisany w wybranym folderze.": "Done. The audio file was saved in the selected folder.",
+    "Gotowe": "Done",
+    "Pobieranie i konwersja zakończone.": "Download and conversion completed.",
+    "Wystąpił błąd podczas pobierania audio.": "An error occurred while downloading audio.",
+    "Błąd": "Error",
+    "Nie udało się pobrać lub przekonwertować pliku. Sprawdź log.": "Could not download or convert the file. Check the log.",
+    "Dostęp: ponawiam pobieranie standardowo.": "Access: retrying download with standard settings.",
+    "Odczytuję playlistę...": "Reading playlist...",
+    "Odczytuję listę elementów playlisty...": "Reading playlist items...",
+    "Nie znaleziono elementów playlisty.": "No playlist items were found.",
+    "Błąd playlisty": "Playlist error",
+    "Nie udało się odczytać elementów playlisty. Sprawdź log.": "Could not read playlist items. Check the log.",
+    "Każdy film będzie scalony/konwertowany przed rozpoczęciem kolejnego.": "Each video will be merged/converted before the next one starts.",
+    "Pliki tymczasowe po poprawnej konwersji będą usuwane automatycznie.": "Temporary files will be removed automatically after successful conversion.",
+    "Pobieranie playlisty wideo zakończone.": "Video playlist download completed.",
+    "Zakończono z błędami": "Completed with errors",
+    "Pobieranie wideo...": "Downloading video...",
+    "Start pobierania wideo...": "Starting video download...",
+    "Nie udało się skompresować pliku Mini. Sprawdź log.": "Could not compress the Mini file. Check the log.",
+    "Gotowe. Wideo zostało zapisane w wybranym folderze.": "Done. The video was saved in the selected folder.",
+    "Pobieranie wideo zakończone.": "Video download completed.",
+    "Wystąpił błąd podczas pobierania wideo.": "An error occurred while downloading video.",
+    "Nie udało się pobrać wideo. Sprawdź log.": "Could not download the video. Check the log.",
+    "Zatrzymywanie pobierania...": "Stopping download...",
+    "STOP: użytkownik przerwał pobieranie.": "STOP: the user interrupted the download.",
+    "Pobieranie lub instalacja nadal trwa. Czy zatrzymać proces i zamknąć program?": "Download or installation is still running. Stop the process and close the program?",
+    "Brak pobranych plików": "No downloaded files",
+    "W tej sesji programu nie pobrano jeszcze żadnego pliku.": "No files have been downloaded during this session yet.",
+    "Wybrana lokalizacja zapisu nie istnieje.": "The selected save location does not exist.",
+    "Nie można otworzyć folderu": "Cannot open folder",
+    "Weryfikacja wideo: nie udało się odnaleźć zapisanego pliku.": "Video verification: could not find the saved file.",
+    "Weryfikacja wideo: plik zawiera dekodowalny obraz i dźwięk.": "Video verification: the file contains decodable video and audio.",
+    "Weryfikacja wideo: plik": "Video verification: file",
+    "Zabezpieczenie DRM": "DRM protection",
+    "Materiał jest chroniony DRM. Program nie omija tego zabezpieczenia.": "This media is DRM-protected. The program does not bypass this protection.",
+    "Wymagany dostęp do treści": "Content access required",
+    "Serwis wymaga aktywnego dostępu lub subskrypcji. Jeśli bieżąca sesja ma uprawnienia, uwierzytelnij ją i ponów próbę.": "The service requires active access or a subscription. If the current session is authorized, sign in and try again.",
+    "Wymagane logowanie": "Sign-in required",
+    "Serwis wymaga zalogowania albo prawidłowej sesji/cookies. Zaloguj się legalnie w serwisie i ponów próbę.": "The service requires a valid signed-in session or cookies. Sign in to the service legally and try again.",
+    "Ograniczenie regionalne": "Regional restriction",
+    "Serwis zgłosił rzeczywistą blokadę regionalną. Sprawdź legalny dostęp, sieć, adres IP i sesję, a następnie ponów próbę.": "The service reported an actual regional restriction. Check your legal access, network, IP address and session, then try again.",
+    "Film prywatny": "Private video",
+    "Film jest prywatny i bieżąca sesja nie ma do niego dostępu.": "The video is private and the current session does not have access to it.",
+    "Materiał niedostępny": "Media unavailable",
+    "Film został usunięty albo nie jest już dostępny w serwisie.": "The video has been removed or is no longer available on the service.",
+    "Ograniczenie wiekowe": "Age restriction",
+    "Materiał ma ograniczenie wiekowe i wymaga uwierzytelnionej sesji uprawnionego użytkownika.": "This media is age-restricted and requires an authenticated session of an eligible user.",
+    "Niepełny plik wideo": "Incomplete video file",
+    "Pobrany plik nie zawiera jednocześnie obrazu i dźwięku. Program odrzucił niepełny wynik.": "The downloaded file does not contain both video and audio. The program rejected the incomplete result.",
+    "Brak strumienia": "No media stream",
+    "Nie znaleziono obsługiwanego strumienia audio lub wideo dla wybranego formatu i jakości.": "No supported audio or video stream was found for the selected format and quality.",
+    "Nie można wykryć źródła": "Cannot detect source",
+    "Strona nie ujawnia obsługiwanego źródła albo zastosowała zabezpieczenia uniemożliwiające jego wykrycie.": "The page does not expose a supported source or uses protection that prevents its detection.",
+    "Problem z autoryzacją": "Authorization problem",
+    "Serwis odrzucił autoryzację. Przyczyną może być sesja, cookies, uprawnienia albo zabezpieczenie źródła.": "The service rejected authorization. The cause may be the session, cookies, permissions or source protection.",
+    "Błąd pobierania": "Download error",
+    "Nie udało się pobrać materiału. Szczegóły techniczne zapisano w logu.": "Could not download the media. Technical details were saved in the log.",
+    "Wykryty materiał": "Discovered media",
+    "Analizuję strukturę strony i szukam materiałów...": "Analyzing the page structure and looking for media...",
+    "Wykrywanie: ekstraktor nie zwrócił poprawnych danych JSON.": "Discovery: the extractor did not return valid JSON data.",
+    "Wykrywanie przerwane.": "Discovery stopped.",
+    "Wybierz jeden, kilka lub wszystkie materiały (dwuklik pobiera wybraną pozycję)": "Select one, several or all media items (double-click downloads the selected item)",
+    "Aby zaznaczyć kilka pozycji: przytrzymaj lewy Ctrl i klikaj lewym przyciskiem myszy.": "To select multiple items, hold the left Ctrl key and click them with the left mouse button.",
+    "Materiał": "Media",
+    "Bezpośredni adres": "Direct URL",
+    " [AKTYWNA TRANSMISJA — NIEDOSTĘPNA]": " [ACTIVE LIVE STREAM — UNAVAILABLE]",
+    "Brak wyboru": "No selection",
+    "Zaznacz co najmniej jeden materiał.": "Select at least one media item.",
+    "Skopiowano bezpośrednie linki do schowka.": "Direct links were copied to the clipboard.",
+    "Zaznacz wszystkie": "Select all",
+    "Kopiuj link": "Copy link",
+    "Pobierz zaznaczone": "Download selected",
+    "Aktywna transmisja": "Active live stream",
+    "Materiał jest trwającym, niezakończonym streamem. Spróbuj ponownie po zakończeniu transmisji.": "This media is an active, unfinished live stream. Try again after the stream has ended.",
+    "Pominięto aktywną transmisję wykrytą podczas skanowania.": "An active live stream found during discovery was skipped.",
+    "Błąd konwersji": "Conversion error",
+    "Nie udało się skompresować materiału w trybie Mini.": "Could not compress the media in Mini mode.",
+    "Wynik pobierania": "Download result",
+    "Sprawdzam, czy materiał nie jest aktywną transmisją...": "Checking whether the media is an active live stream...",
+    "Nie udało się sprawdzić statusu transmisji; kontynuuję standardowo.": "Could not check the live stream status; continuing with standard settings.",
+    "Aktywna transmisja nie może zostać pobrana.": "An active live stream cannot be downloaded.",
+    "Wykryto aktywny, niezakończony streaming. Pobieranie zostało zablokowane.": "An active, unfinished live stream was detected. The download was blocked.",
+    "Ten materiał jest trwającą transmisją na żywo.\n\nProgram nie pobiera niezakończonych streamów. Spróbuj ponownie po zakończeniu transmisji, gdy materiał będzie dostępny jako zwykłe nagranie.": "This media is an active live stream.\n\nThe program does not download unfinished live streams. Try again after the stream has ended, when the media is available as a regular recording.",
+    "Napisy: nie udało się pobrać lub zintegrować napisów. Ponawiam pobieranie filmu bez napisów.": "Subtitles: could not download or embed subtitles. Retrying the video download without subtitles.",
+    "Napisy nie zadziałały. Pobieram film bez napisów...": "Subtitles did not work. Downloading the video without subtitles...",
+    "Sprawdzam formaty dostępne dla tego linku...": "Checking the formats available for this link...",
+    "Nie udało się odczytać listy dostępnych formatów dla tego linku.": "Could not read the list of formats available for this link.",
+    "Serwis udostępnia tylko strumień audio — nie znaleziono żadnego strumienia wideo.": "The service provides only an audio stream — no video stream was found.",
+    "Serwis udostępnia strumienie wideo, ale nie podaje ich rozdzielczości. Spróbuj wybrać MP4 Najlepsza.": "The service provides video streams but does not report their resolution. Try selecting MP4 Best.",
+    "Część wariantów nie zawiera informacji o rozdzielczości.": "Some options do not include resolution information.",
+    "Wybierz jedną z dostępnych jakości albo wariant MP4 Najlepsza.": "Select one of the available qualities or the MP4 Best option.",
+    "Dostępne rozdzielczości wideo:": "Available video resolutions:",
+    "Formaty źródłowe wideo:": "Source video formats:",
+    "Wskazówka: ta strona może zawierać zbyt wiele różnych treści. Otwórz konkretną podstronę wybranego artykułu, filmu lub materiału, skopiuj jej adres i uruchom WYKRYJ ponownie.": "Tip: this page may contain too much unrelated content. Open the specific page for the selected article, video or media item, copy its address, and run DISCOVER again.",
+    "Użyj zwykłego trybu pobierania": "Use standard download mode",
+    "Ten link należy pobrać w zwykłym trybie.": "This link should be downloaded using standard mode.",
+    "Do pobrania tego materiału użyj zwykłego trybu: Pobierz dźwięk, Pobierz wideo albo Pobierz całą playlistę.\n\nTryb WYKRYJ służy do wyszukiwania treści na stronach, które nie udostępniają prostych, bezpośrednich linków do materiałów.": "To download this media, use a standard mode: Download audio, Download video, or Download full playlist.\n\nDISCOVER is intended for finding media on pages that do not provide simple, direct links to it.",
+    "Facebook — zalecany zwykły tryb": "Facebook — standard mode recommended",
+    "Do pobierania linków z Facebooka zalecany jest zwykły tryb: Pobierz dźwięk, Pobierz wideo albo Pobierz całą playlistę.\n\nTryb WYKRYJ służy głównie do wyszukiwania treści na stronach, które nie udostępniają prostych, bezpośrednich linków do materiałów.\n\nCzy mimo to uruchomić wykrywanie?": "For Facebook links, a standard mode is recommended: Download audio, Download video, or Download full playlist.\n\nDISCOVER is intended mainly for finding media on pages that do not provide simple, direct links to it.\n\nRun discovery anyway?",
+    "Wykrywanie anulowane. Wybierz tryb pobierania dźwięku, wideo albo playlisty.": "Discovery cancelled. Select audio, video, or playlist download mode.",
+    "Użytkownik wybrał wykrywanie linku z Facebooka pomimo zalecenia zwykłego trybu.": "The user chose to discover the Facebook link despite the standard mode recommendation.",
+    "Użytkownik zrezygnował z wykrywania linku z Facebooka.": "The user cancelled discovery of the Facebook link.",
+    "Wybrana jakość jest widoczna w źródle, ale nie udało się pobrać kompletnego strumienia obrazu i dźwięku. Szczegóły są w logu.": "The selected quality is visible in the source, but a complete video and audio stream could not be downloaded. Details are in the log.",
+}
+
+MESSAGE_REPLACEMENTS_EN = [
+    ("Autor:", "Author:"),
+    ("Wersja programu:", "Program version:"),
+    ("Nazwa:", "Name:"),
+    ("Disclaimer: Nie ponosimy odpowiedzialności za sposób wykorzystania programu. Pobierając materiały, użytkownik potwierdza, że ma do tego prawo.", "Disclaimer: We are not responsible for how the program is used. By downloading materials, the user confirms that they have the right to do so."),
+    ("Dane triala zostały zmienione lub uszkodzone.", "Trial data has been changed or damaged."),
+    ("Zegar systemowy jest cofnięty względem daty kompilacji programu.", "The system clock is set before the program build date."),
+    ("Wykryto cofnięcie zegara systemowego.", "A system clock rollback was detected."),
+    ("Data startu triala jest nieprawidłowa.", "The trial start date is invalid."),
+    ("Pobieranie zostało zablokowane. Skontaktuj się z autorem, aby otrzymać nową wersję programu.", "Downloading has been blocked. Contact the author to receive a new program version."),
+    ("Czas testów tej wersji programu minął.", "The test period for this program version has expired."),
+    ("Plik programu nie przechodzi kontroli podpisu albo został zmieniony po kompilacji.", "The program file does not pass signature verification or was changed after compilation."),
+    ("Uruchom oryginalny, podpisany plik EXE.", "Run the original signed EXE file."),
+    ("Program zablokowany:", "Program blocked:"),
+    ("Mini: trwa kompresja...", "Mini: compression in progress..."),
+    ("czas ", "time "),
+    ("Napisy: nie udało się odczytać danych napisów:", "Subtitles: could not read subtitle data:"),
+    ("Napisy zostały scalone z filmem.", "Subtitles were embedded into the video."),
+    ("Napisy zostały wtopione w obraz filmu.", "Subtitles were burned into the video image."),
+    ("Napisy były wykryte, ale nie udało się ich scalić z filmem.", "Subtitles were detected, but could not be embedded into the video."),
+    ("W tym filmie nie znaleziono napisów po polsku lub angielsku.", "No Polish or English subtitles were found for this video."),
+    ("Subtitles: Subtitles were detected, but could not be downloaded or embedded.", "Subtitles: detected, but could not be downloaded or embedded."),
+    ("Subtitles: Subtitles were available and embedded in the video.", "Subtitles: available and embedded in the video."),
+    ("Subtitles: No regular or automatic Polish or English subtitles were found for this video.", "Subtitles: no regular or automatic Polish or English subtitles were found for this video."),
+    ("Napisy: znaleziono język", "Subtitles: found language"),
+    ("Napisy: ffprobe:", "Subtitles: ffprobe:"),
+    ("polskim", "Polish"),
+    ("angielskim", "English"),
+    (", źródło:", ", source:"),
+    ("napisy automatyczne", "automatic subtitles"),
+    ("napisy", "subtitles"),
+    ("Zostaną wtopione w obraz filmu.", "They will be burned into the video image."),
+    ("Napisy były dostępne i zostały zintegrowane z filmem.", "Subtitles were available and embedded in the video."),
+    ("Język:", "Language:"),
+    ("Mini: ffprobe:", "Mini: ffprobe:"),
+    ("Mini: skompresowano do", "Mini: compressed to"),
+    ("Zmniejszenie:", "Reduction:"),
+    ("Parametry:", "Parameters:"),
+    ("Mini: nie udało się zejść do 20 MB, ale zapisano najmniejszy uzyskany plik:", "Mini: could not get below 20 MB, but saved the smallest generated file:"),
+    ("Mini: nie znaleziono pliku do kompresji:", "Mini: compression file not found:"),
+    ("Mini: kompresja do maks. 20 MB. Rozmiar wejściowy:", "Mini: compression to max. 20 MB. Input size:"),
+    ("Mini: próba kompresji", "Mini: compression attempt"),
+    ("wideo", "video"),
+    ("audio", "audio"),
+    ("obsługa audio i video", "audio and video support"),
+    ("Mini: rozmiar po kompresji:", "Mini: size after compression:"),
+    ("Napisy: usunięto osobny plik napisów:", "Subtitles: removed separate subtitle file:"),
+    ("Napisy: nie udało się usunąć osobnego pliku", "Subtitles: could not remove separate file"),
+    ("Bez napisów PL/EN:", "Without PL/EN subtitles:"),
+    ("program pobierania", "download engine"),
+    ("obsługa audio i wideo", "audio and video support"),
+    ("Brakuje plików programu:", "Missing program files:"),
+    ("Brakuje komponentów:", "Missing components:"),
+    ("Program zapyta o instalację przy pobieraniu.", "The program will ask to install them when downloading."),
+    ("Fix: yt-dlp nie uruchamia się poprawnie:", "Fix: yt-dlp does not start correctly:"),
+    ("Fix: wykryta wersja yt-dlp:", "Fix: detected yt-dlp version:"),
+    ("Fix: najnowsza wersja yt-dlp na GitHubie:", "Fix: latest yt-dlp version on GitHub:"),
+    ("Fix: nie udało się sprawdzić najnowszej wersji yt-dlp na GitHubie:", "Fix: could not check the latest yt-dlp version on GitHub:"),
+    ("Fix: pobieranie yt-dlp z GitHuba nie powiodło się:", "Fix: downloading yt-dlp from GitHub failed:"),
+    ("Fix: aktualizacja yt-dlp przez -U zwróciła kod", "Fix: yt-dlp update through -U returned code"),
+    ("Fix: nie udało się przygotować kopii yt-dlp w folderze danych aplikacji:", "Fix: could not prepare a yt-dlp copy in the app data folder:"),
+    ("Fix: pobieram yt-dlp", "Fix: downloading yt-dlp"),
+    ("pobrany plik yt-dlp.exe jest podejrzanie mały", "downloaded yt-dlp.exe is suspiciously small"),
+    ("pobrany yt-dlp.exe nie uruchamia się poprawnie", "downloaded yt-dlp.exe does not start correctly"),
+    ("Fix: zainstalowana wersja yt-dlp:", "Fix: installed yt-dlp version:"),
+    ("Fix: uwaga, GitHub zgłasza", "Fix: warning, GitHub reports"),
+    ("a plik uruchamia się jako", "but the file starts as"),
+    ("Fix: po naprawie autora szukaj nowej wersji tutaj:", "Fix: after the author's repair, look for the new version here:"),
+    ("Wykryto nieaktualny komponent yt-dlp. Najnowsza znana wersja:", "An outdated yt-dlp component was detected. Latest known version:"),
+    ("Ta skompilowana wersja EXE nie naprawia samej siebie, żeby nie naruszać podpisu", "This compiled EXE version does not repair itself, to avoid breaking the signature"),
+    ("i nie zostawiać dodatkowych plików przy programie.", "and leaving additional files next to the program."),
+    ("Po naprawie przez autora pobierz nową wersję programu z repozytorium:", "After the author's repair, download the new version from the repository:"),
+    ("Do poprawnego działania programu trzeba zainstalować:", "For the program to work correctly, install:"),
+    ("Program użyje winget. Może pojawić się okno zgody systemu Windows.", "The program will use winget. A Windows consent window may appear."),
+    ("Czy wyrażasz zgodę na instalację?", "Do you agree to the installation?"),
+    ("Instaluję", "Installing"),
+    ("Instalacja:", "Installation:"),
+    ("OK: instalator zakończył pracę dla", "OK: installer finished for"),
+    ("jest już zainstalowany.", "is already installed."),
+    ("UWAGA: winget zwrócił kod", "WARNING: winget returned code"),
+    (" przy ", " for "),
+    ("TIMEOUT: instalacja", "TIMEOUT: installation of"),
+    ("trwała ponad", "took more than"),
+    ("sekund. Proces został przerwany, żeby program nie wyglądał na zawieszony.", "seconds. The process was stopped so the program would not appear frozen."),
+    ("Instalacja", "Installation"),
+    ("Installation zakończona, ale program nadal nie widzi:", "Installation finished, but the program still cannot see:"),
+    ("trwała zbyt długo i została zatrzymana.", "took too long and was stopped."),
+    ("Możliwe, że winget czekał na zgodę systemu, administratora albo miał problem sieciowy.", "winget may have been waiting for system/admin consent or had a network issue."),
+    ("Spróbuj uruchomić program ponownie albo zainstalować komponent ręcznie.", "Try running the program again or install the component manually."),
+    ("Błąd instalacji", "Installation error for"),
+    ("Instalacja zakończona, ale program nadal nie widzi:", "Installation finished, but the program still cannot see:"),
+    ("Wklejony link wygląda jak playlista YouTube.", "The pasted link looks like a YouTube playlist."),
+    ("TAK - pobierz wszystkie pliki z playlisty.", "YES - download all files from the playlist."),
+    ("NIE - pobierz tylko pojedynczy utwór/film z tego linku.", "NO - download only a single track/video from this link."),
+    ("ANULUJ - przerwij operację.", "CANCEL - stop the operation."),
+    ("Link oczyszczony z playlisty:", "Link cleaned from playlist parameters:"),
+    ("Tryb:", "Mode:"),
+    ("cała playlista", "entire playlist"),
+    ("tylko pojedynczy utwór", "single track only"),
+    ("tylko pojedynczy film", "single video only"),
+    ("Format audio:", "Audio format:"),
+    ("Format wideo:", "Video format:"),
+    (", jakość:", ", quality:"),
+    ("Dostęp: ponawiam pobieranie", "Access: retrying download"),
+    ("Ponawiam pobieranie", "Retrying download"),
+    ("standardowo", "with standard settings"),
+    ("z naglowkami przegladarki", "with browser headers"),
+    ("Nie udało się odczytać playlisty. Kod błędu:", "Could not read playlist. Error code:"),
+    ("Nie udało się odczytać danych playlisty:", "Could not read playlist data:"),
+    ("Znaleziono elementów playlisty:", "Playlist items found:"),
+    ("Playlista: pobieranie", "Playlist: downloading"),
+    ("Element playlisty", "Playlist item"),
+    ("Błąd: element", "Error: item"),
+    ("nie został poprawnie skompresowany w trybie Mini.", "was not correctly compressed in Mini mode."),
+    ("OK: element", "OK: item"),
+    ("zakończony i przekonwertowany.", "finished and converted."),
+    ("zakończył się kodem", "finished with code"),
+    ("Przerwano playlistę. Gotowe pliki:", "Playlist stopped. Completed files:"),
+    ("Pobieranie playlisty zostało zatrzymane.", "Playlist download has been stopped."),
+    ("Poprawnie zakończone pliki:", "Successfully completed files:"),
+    ("Napisy dodane:", "Subtitles added:"),
+    ("Bez napisów PL/EN:", "Without PL/EN subtitles:"),
+    ("Gotowe. Playlista wideo zakończona:", "Done. Video playlist completed:"),
+    ("Gotowe. Playlista video zakończona:", "Done. Video playlist completed:"),
+    ("Playlista zakończona z błędami. Gotowe:", "Playlist completed with errors. Done:"),
+    ("Poprawnie pobrano:", "Successfully downloaded:"),
+    ("Błędy:", "Errors:"),
+    ("Szczegóły są w logu.", "Details are in the log."),
+    ("Napisy:", "Subtitles:"),
+    ("Gotowe. Wideo zapisane.", "Done. Video saved."),
+    ("Pobieranie wideo zakończone.", "Video download completed."),
+    ("Pobieranie video zakończone.", "Video download completed."),
+    ("Nie udało się zatrzymać procesu normalnie:", "Could not stop the process normally:"),
+    ("Nie udało się otworzyć lokalizacji:", "Could not open the location:"),
+    ("Weryfikacja dekodowania:", "Decode verification:"),
+    ("Weryfikacja wideo: plik", "Video verification: file"),
+    ("nie zawiera", "does not contain"),
+    (" ani ", " or "),
+    ("obrazu", "video"),
+    ("dźwięku", "audio"),
+    ("ma uszkodzony lub niedekodowalny strumień.", "has a corrupt or undecodable stream."),
+    ("bez zmian", "unchanged"),
+    ("Wykrywanie multimediów na stronie:", "Discovering media on page:"),
+    ("Wykrywanie: znaleziono podstron materiałów:", "Discovery: media subpages found:"),
+    ("Analizuję podstrony materiałów:", "Analyzing media subpages:"),
+    ("Pominięto podstronę", "Skipped subpage"),
+    ("Analiza HTML:", "HTML analysis:"),
+    ("Wykryto materiałów:", "Media items found:"),
+    ("Wybierz pozycje z listy.", "Select items from the list."),
+    ("Wykryte materiały: pobieranie", "Discovered media: downloading"),
+    ("Wykryte materiały", "Discovered media"),
+    ("--- Materiał", "--- Media item"),
+    ("Nazwa pliku:", "File name:"),
+    ("Przyczyna:", "Cause:"),
+    ("Operację przerwano. Pobrano", "Operation stopped. Downloaded"),
+    ("Pobrano wszystkie materiały:", "All media items downloaded:"),
+    ("Pobrano", "Downloaded"),
+    ("Niepowodzenia:", "Failures:"),
+    ("Nie udało się zakończyć całego procesu:", "Could not terminate the entire process:"),
+    ("Sprawdzanie dostępnych formatów:", "Checking available formats:"),
+    ("Nie udało się pobrać wybranego wariantu", "Could not download the selected option"),
+    ("Dostępne rozdzielczości wideo:", "Available video resolutions:"),
+    ("Najwyższa wykryta rozdzielczość:", "Highest detected resolution:"),
+    ("Formaty źródłowe wideo:", "Source video formats:"),
+    ("nieprawidłowe dane JSON:", "invalid JSON data:"),
+    ("Najlepsza", "Best"),
+]
+
+
+def get_tool_executable_name(command: str) -> str:
+    if os.name == "nt" and not command.lower().endswith(".exe"):
+        return f"{command}.exe"
+    return command
+
+
+def get_app_dir():
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def get_app_data_dir():
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
+    if base:
+        return Path(base) / "VideoAndSoundDownloaderPro"
+    return Path.home() / ".VideoAndSoundDownloaderPro"
+
+
+def get_external_tools_dir():
+    if not getattr(sys, "frozen", False):
+        return get_app_dir() / TOOLS_DIR_NAME
+    return get_app_data_dir() / TOOLS_DIR_NAME
+
+
+def get_bundled_tool_path(command: str):
+    executable_name = get_tool_executable_name(command)
+    roots = []
+    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+        roots.append(Path(sys._MEIPASS))
+    else:
+        roots.append(Path(__file__).resolve().parent)
+
+    for root in roots:
+        candidate = root / TOOLS_DIR_NAME / executable_name
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def get_bundled_tools_dir():
+    for command in ("yt-dlp", "ffmpeg", "ffprobe"):
+        tool_path = get_bundled_tool_path(command)
+        if tool_path:
+            return tool_path.parent
+    return None
+
+
+def get_external_tool_path(command: str):
+    target = get_external_tools_dir() / get_tool_executable_name(command)
+    if target.exists():
+        return target
+    return None
+
+
+def get_bundled_tool_dirs():
+    dirs = []
+    seen = set()
+    for command in ("yt-dlp", "ffmpeg", "ffprobe"):
+        tool_path = get_bundled_tool_path(command)
+        if not tool_path:
+            continue
+        key = str(tool_path.parent).lower()
+        if key not in seen:
+            seen.add(key)
+            dirs.append(tool_path.parent)
+    return dirs
+
+
+def resolve_tool_command(command: str) -> str:
+    if command.lower() in {"yt-dlp", "yt-dlp.exe"}:
+        external_path = get_external_tool_path(command)
+        if external_path:
+            return str(external_path)
+
+    bundled_path = get_bundled_tool_path(command)
+    if bundled_path:
+        return str(bundled_path)
+    return shutil.which(command) or command
+
+
+def command_exists(command: str) -> bool:
+    return (
+        get_external_tool_path(command) is not None
+        or get_bundled_tool_path(command) is not None
+        or shutil.which(command) is not None
+    )
+
+
+def get_process_environment():
+    env = os.environ.copy()
+    tool_dirs = []
+    external_dir = get_external_tools_dir()
+    if external_dir.exists():
+        tool_dirs.append(external_dir)
+    tool_dirs.extend(get_bundled_tool_dirs())
+    if tool_dirs:
+        unique_tool_dirs = []
+        seen = set()
+        for path in tool_dirs:
+            key = str(path).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            unique_tool_dirs.append(path)
+        env["PATH"] = os.pathsep.join(str(path) for path in unique_tool_dirs) + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def no_window_creation_flags() -> int:
+    return subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def is_probably_youtube_playlist(url: str) -> bool:
+    try:
+        parsed = urlparse(html_unescape(url.strip()))
+        host = parsed.netloc.lower().split(":", 1)[0]
+        if host != "youtu.be" and not host.endswith("youtube.com"):
+            return False
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        return (
+            bool(query.get("list", [""])[0].strip())
+            or parsed.path.rstrip("/").lower().endswith("/playlist")
+        )
+    except Exception:
+        return False
+
+
+def strip_playlist_params(url: str) -> str:
+    try:
+        parsed = urlparse(html_unescape(url.strip()))
+        host = parsed.netloc.lower().split(":", 1)[0]
+        if host != "youtu.be" and not host.endswith("youtube.com"):
+            return url
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        path = parsed.path.rstrip("/").lower()
+
+        # Bezpośredni adres /playlist nie zawiera identyfikatora filmu.
+        # Usunięcie parametru list= zmieniłoby go w nieprawidłowy adres.
+        # W takim przypadku pełny link zachowujemy, a pobieranie pojedynczego
+        # elementu wymusza później opcja --playlist-items 1.
+        if path.endswith("/playlist") and not query.get("v"):
+            return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, parsed.query, parsed.fragment))
+
+        # Parametry te przełączają ekstraktor yt-dlp z pojedynczego materiału
+        # na playlistę. Pozostałe (np. czas rozpoczęcia) można bezpiecznie zachować.
+        for key in ("list", "index", "start_radio", "pp"):
+            query.pop(key, None)
+        new_query = urlencode(query, doseq=True)
+        return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment))
+    except Exception:
+        return url
+
+
+class VideoDownloaderApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+
+        self.colors = {
+            "bg": "#07111f",
+            "card": "#0d1726",
+            "panel": "#111d2d",
+            "panel_hover": "#142b46",
+            "border": "#22344b",
+            "border_strong": "#2f8cff",
+            "text": "#e8f1ff",
+            "muted": "#8ca0b8",
+            "muted_2": "#64748b",
+            "blue": "#1768e8",
+            "blue_hover": "#1f7cff",
+            "green": "#35e879",
+            "red": "#ef4444",
+            "red_hover": "#f87171",
+        }
+
+        self.title(f"{APP_TITLE} {APP_VERSION}")
+        self.apply_window_icon()
+        self.geometry("980x760")
+        self.minsize(980, 760)
+        self.configure(fg_color=self.colors["bg"])
+
+        self.save_dir = tk.StringVar(master=self, value=get_default_save_dir())
+        self.url = tk.StringVar(master=self)
+        self.language_var = tk.StringVar(master=self, value="PL")
+        self.language = "PL"
+        self.quality_var = tk.StringVar(master=self, value=MODE_DEFAULT_QUALITY["MP3"])
+        self.subtitles_var = tk.BooleanVar(master=self, value=False)
+        self.subtitle_status_var = tk.StringVar(
+            master=self,
+            value="Najpierw polskie, w razie braku angielskie. Napisy będą w filmie.",
+        )
+        self.last_status_source = "Gotowe."
+        self.status = tk.StringVar(master=self, value="Gotowe.")
+
+        self.selected_mode = "MP3"
+        self.mode_cards = {}
+        self.ui_text_widgets = {}
+        self.log_source_lines = []
+        self.current_process = None
+        self.active_progress_label = ""
+        self.last_process_output_lines = []
+        self.session_download_count = 0
+        self.stop_requested = False
+        self.process_lock = threading.Lock()
+        self.trial_expired = False
+        self.self_integrity_checked = False
+        self.self_integrity_failed = False
+
+        scan_icon_source = Image.open(get_resource_path("scan_icon_yellow.png")).convert("RGBA")
+        self.scan_card_icon = ctk.CTkImage(
+            light_image=scan_icon_source, dark_image=scan_icon_source, size=(28, 28)
+        )
+        self.scan_action_icon = ctk.CTkImage(
+            light_image=scan_icon_source, dark_image=scan_icon_source, size=(14, 14)
+        )
+        playlist_icon_source = Image.open(get_resource_path("playlist_icon_green.png")).convert("RGBA")
+        self.playlist_card_icon = ctk.CTkImage(
+            light_image=playlist_icon_source, dark_image=playlist_icon_source, size=(28, 28)
+        )
+
+        self.build_ui()
+        self.select_mode("MP3")
+        self.after(500, self.check_components_only)
+        self.after(700, self.enforce_trial_status)
+        self.after(150, self.url_entry.focus_set)
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    def build_ui(self):
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+
+        main_card = ctk.CTkFrame(
+            self,
+            corner_radius=24,
+            fg_color=self.colors["card"],
+            border_width=1,
+            border_color="#1f3147",
+        )
+        main_card.grid(row=0, column=0, padx=20, pady=18, sticky="nsew")
+        main_card.grid_columnconfigure(0, weight=1)
+        main_card.grid_rowconfigure(8, weight=1, minsize=120)
+
+        header = ctk.CTkFrame(main_card, fg_color="transparent")
+        header.grid(row=0, column=0, padx=28, pady=(18, 8), sticky="ew")
+        header.grid_columnconfigure(1, weight=1)
+
+        app_icon = ctk.CTkLabel(
+            header,
+            text="↓",
+            width=42,
+            height=42,
+            corner_radius=21,
+            fg_color="#10243a",
+            text_color="#8bd8ff",
+            font=("Segoe UI", 24, "bold"),
+        )
+        app_icon.grid(row=0, column=0, rowspan=2, sticky="w", padx=(0, 12))
+
+        title = ctk.CTkLabel(
+            header,
+            text=APP_TITLE,
+            font=("Segoe UI", 22, "bold"),
+            text_color=self.colors["text"],
+        )
+        title.grid(row=0, column=1, sticky="w")
+
+        subtitle = ctk.CTkLabel(
+            header,
+            text="Pobieraj audio, wideo i playlisty z jednego panelu",
+            font=("Segoe UI", 12),
+            text_color=self.colors["muted"],
+        )
+        subtitle.grid(row=1, column=1, sticky="w", pady=(1, 0))
+        self.ui_text_widgets["subtitle"] = (subtitle, "Pobieraj audio, wideo i playlisty z jednego panelu")
+
+        right_header = ctk.CTkFrame(header, fg_color="transparent")
+        right_header.grid(row=0, column=2, rowspan=2, sticky="e")
+
+        version = ctk.CTkLabel(
+            right_header,
+            text=f"v{APP_VERSION}",
+            width=66,
+            height=26,
+            corner_radius=13,
+            fg_color="#13243a",
+            text_color="#9fb5d1",
+            font=("Segoe UI", 11, "bold"),
+        )
+        version.grid(row=0, column=0, sticky="e")
+
+        self.language_label = ctk.CTkLabel(
+            right_header,
+            text="Wybierz język",
+            font=("Segoe UI", 10, "bold"),
+            text_color="#9fb5d1",
+        )
+        self.language_label.grid(row=1, column=0, sticky="e", pady=(4, 2))
+        self.ui_text_widgets["language_label"] = (self.language_label, "Wybierz język")
+
+        self.language_switch = ctk.CTkSegmentedButton(
+            right_header,
+            values=["PL", "EN"],
+            variable=self.language_var,
+            width=96,
+            height=26,
+            corner_radius=10,
+            fg_color="#13243a",
+            selected_color=self.colors["blue"],
+            selected_hover_color=self.colors["blue_hover"],
+            unselected_color="#13243a",
+            unselected_hover_color="#1b3558",
+            text_color="#e8f1ff",
+            font=("Segoe UI", 10, "bold"),
+            command=self.change_language,
+        )
+        self.language_switch.grid(row=2, column=0, sticky="e")
+        self.language_switch.set("PL")
+
+        link_label = ctk.CTkLabel(
+            main_card,
+            text="Link:",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#b9c7d9",
+        )
+        link_label.grid(row=1, column=0, padx=28, pady=(6, 4), sticky="w")
+        self.ui_text_widgets["link_label"] = (link_label, "Link:")
+
+        link_row = ctk.CTkFrame(main_card, fg_color="transparent")
+        link_row.grid(row=2, column=0, padx=28, pady=(0, 14), sticky="ew")
+        link_row.grid_columnconfigure(0, weight=1)
+
+        self.url_entry = ctk.CTkEntry(
+            link_row,
+            textvariable=self.url,
+            height=42,
+            corner_radius=12,
+            fg_color=self.colors["panel"],
+            border_color=self.colors["border"],
+            text_color=self.colors["text"],
+            placeholder_text="Wklej link z YouTube, Facebooka albo innej obsługiwanej strony...",
+            placeholder_text_color=self.colors["muted_2"],
+            font=("Segoe UI", 12),
+        )
+        self.url_entry.grid(row=0, column=0, sticky="ew")
+
+        self.paste_btn = ctk.CTkButton(
+            link_row,
+            text="🔗",
+            width=46,
+            height=42,
+            corner_radius=12,
+            fg_color="#142236",
+            hover_color="#1b3558",
+            text_color="#cce6ff",
+            font=("Segoe UI", 18),
+            command=self.paste_from_clipboard,
+        )
+        self.paste_btn.grid(row=0, column=1, padx=(10, 0))
+
+        option_header = ctk.CTkFrame(main_card, fg_color="transparent")
+        option_header.grid(row=3, column=0, padx=28, pady=(0, 7), sticky="ew")
+        option_header.grid_columnconfigure(0, weight=1)
+
+        option_label = ctk.CTkLabel(
+            option_header,
+            text="Wybierz opcję:",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#b9c7d9",
+        )
+        option_label.grid(row=0, column=0, sticky="w")
+        self.ui_text_widgets["option_label"] = (option_label, "Wybierz opcję:")
+
+        self.subtitle_option_frame = ctk.CTkFrame(option_header, fg_color="transparent")
+        self.subtitle_option_frame.grid(row=0, column=1, sticky="e")
+
+        self.subtitle_switch = ctk.CTkSwitch(
+            self.subtitle_option_frame,
+            text="Napisy do filmu",
+            variable=self.subtitles_var,
+            onvalue=True,
+            offvalue=False,
+            progress_color=self.colors["blue"],
+            button_color="#cce6ff",
+            button_hover_color="#ffffff",
+            fg_color="#25374f",
+            text_color="#b9c7d9",
+            font=("Segoe UI", 11),
+        )
+        self.subtitle_switch.grid(row=0, column=0, sticky="e")
+        self.ui_text_widgets["subtitle_switch"] = (self.subtitle_switch, "Napisy do filmu")
+
+        cards_row = ctk.CTkFrame(main_card, fg_color="transparent")
+        cards_row.grid(row=4, column=0, padx=28, pady=(0, 12), sticky="ew")
+        for index in range(4):
+            cards_row.grid_columnconfigure(index, weight=1, uniform="modecards")
+
+        self.create_mode_card(cards_row, "MP3", "♫", "MP3", "Pobierz dźwięk", "#d35cff", 0)
+        self.create_mode_card(cards_row, "MP4", "■", "MP4", "Pobierz wideo", "#24a8ff", 1)
+        self.create_mode_card(cards_row, "PLAYLISTA", "", "PLAYLISTA", "Pobierz całą listę", "#35e879", 2)
+        self.create_mode_card(cards_row, "WEB_SCAN", "", "WYKRYJ", "Wykryj audio lub wideo", "#e7c873", 3)
+
+        settings = ctk.CTkFrame(main_card, fg_color="transparent")
+        settings.grid(row=5, column=0, padx=28, pady=(0, 14), sticky="ew")
+        settings.grid_columnconfigure(0, weight=1)
+        settings.grid_columnconfigure(1, weight=2)
+
+        quality_group = ctk.CTkFrame(settings, fg_color="transparent")
+        quality_group.grid(row=0, column=0, sticky="ew", padx=(0, 12))
+        quality_group.grid_columnconfigure(0, weight=1)
+
+        quality_label = ctk.CTkLabel(
+            quality_group,
+            text="Jakość / Format:",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#b9c7d9",
+        )
+        quality_label.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.ui_text_widgets["quality_label"] = (quality_label, "Jakość / Format:")
+
+        self.quality_box = ctk.CTkComboBox(
+            quality_group,
+            variable=self.quality_var,
+            values=MODE_QUALITY_OPTIONS["MP3"],
+            height=40,
+            corner_radius=12,
+            fg_color=self.colors["panel"],
+            border_color=self.colors["border"],
+            button_color="#182a42",
+            button_hover_color="#22436e",
+            dropdown_fg_color=self.colors["panel"],
+            dropdown_hover_color="#1c3454",
+            text_color=self.colors["text"],
+            dropdown_text_color=self.colors["text"],
+            font=("Segoe UI", 12),
+            state="readonly",
+        )
+        self.quality_box.grid(row=1, column=0, sticky="ew")
+
+        folder_group = ctk.CTkFrame(settings, fg_color="transparent")
+        folder_group.grid(row=0, column=1, sticky="ew")
+        folder_group.grid_columnconfigure(0, weight=1)
+
+        folder_label = ctk.CTkLabel(
+            folder_group,
+            text="Zapisz do:",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#b9c7d9",
+        )
+        folder_label.grid(row=0, column=0, sticky="w", pady=(0, 4))
+        self.ui_text_widgets["folder_label"] = (folder_label, "Zapisz do:")
+
+        folder_row = ctk.CTkFrame(folder_group, fg_color="transparent")
+        folder_row.grid(row=1, column=0, sticky="ew")
+        folder_row.grid_columnconfigure(0, weight=1)
+
+        self.path_entry = ctk.CTkEntry(
+            folder_row,
+            textvariable=self.save_dir,
+            height=40,
+            corner_radius=12,
+            fg_color=self.colors["panel"],
+            border_color=self.colors["border"],
+            text_color=self.colors["text"],
+            font=("Segoe UI", 12),
+        )
+        self.path_entry.grid(row=0, column=0, sticky="ew")
+
+        self.browse_btn = ctk.CTkButton(
+            folder_row,
+            text="📁",
+            width=46,
+            height=40,
+            corner_radius=12,
+            fg_color="#142236",
+            hover_color="#1b3558",
+            text_color="#cce6ff",
+            font=("Segoe UI", 18),
+            command=self.choose_folder,
+        )
+        self.browse_btn.grid(row=0, column=1, padx=(10, 0))
+
+        action_row = ctk.CTkFrame(main_card, fg_color="transparent")
+        action_row.grid(row=6, column=0, padx=28, pady=(0, 12), sticky="ew")
+        action_row.grid_columnconfigure(0, weight=1)
+
+        self.download_btn = ctk.CTkButton(
+            action_row,
+            text="↓   POBIERZ",
+            height=48,
+            corner_radius=13,
+            fg_color=self.colors["blue"],
+            hover_color=self.colors["blue_hover"],
+            text_color="#eef6ff",
+            font=("Segoe UI", 15, "bold"),
+            command=self.start_download,
+        )
+        self.download_btn.grid(row=0, column=0, sticky="ew")
+
+        self.stop_btn = ctk.CTkButton(
+            action_row,
+            text="STOP",
+            width=120,
+            height=48,
+            corner_radius=13,
+            fg_color="#3b1720",
+            hover_color=self.colors["red_hover"],
+            text_color="#ffd7dd",
+            font=("Segoe UI", 14, "bold"),
+            command=self.stop_download,
+            state="disabled",
+        )
+        self.stop_btn.grid(row=0, column=1, padx=(12, 0))
+
+        self.downloaded_btn = ctk.CTkButton(
+            action_row,
+            text="Pobrane",
+            width=104,
+            height=48,
+            corner_radius=13,
+            fg_color="#142236",
+            hover_color="#1b3558",
+            border_width=1,
+            border_color=self.colors["border"],
+            text_color="#cce6ff",
+            font=("Segoe UI", 12, "bold"),
+            command=self.open_downloaded_location,
+        )
+        self.downloaded_btn.grid(row=0, column=2, padx=(12, 0))
+        self.ui_text_widgets["downloaded_btn"] = (self.downloaded_btn, "Pobrane")
+
+        status_row = ctk.CTkFrame(main_card, fg_color="transparent")
+        status_row.grid(row=7, column=0, padx=28, pady=(0, 8), sticky="ew")
+        status_row.grid_columnconfigure(0, weight=1)
+
+        self.status_label = ctk.CTkLabel(
+            status_row,
+            textvariable=self.status,
+            height=30,
+            corner_radius=15,
+            fg_color="#101f33",
+            text_color="#b9c7d9",
+            font=("Segoe UI", 12),
+            anchor="w",
+            padx=12,
+        )
+        self.status_label.grid(row=0, column=0, sticky="ew")
+
+        log_frame = ctk.CTkFrame(
+            main_card,
+            corner_radius=16,
+            fg_color="#0a1422",
+            border_width=1,
+            border_color="#1f3147",
+        )
+        log_frame.grid(row=8, column=0, padx=28, pady=(0, 12), sticky="nsew")
+        log_frame.grid_propagate(False)
+        log_frame.grid_columnconfigure(0, weight=1)
+        log_frame.grid_rowconfigure(1, weight=1)
+
+        log_header = ctk.CTkFrame(log_frame, fg_color="transparent")
+        log_header.grid(row=0, column=0, padx=14, pady=(10, 4), sticky="ew")
+        log_header.grid_columnconfigure(2, weight=1)
+
+        log_label = ctk.CTkLabel(
+            log_header,
+            text="Log",
+            font=("Segoe UI", 13, "bold"),
+            text_color="#b9c7d9",
+        )
+        log_label.grid(row=0, column=0, sticky="w")
+        self.ui_text_widgets["log_label"] = (log_label, "Log")
+
+        self.spinner_symbols = ["◐", "◓", "◑", "◒"]
+        self.spinner_index = 0
+        self.spinner_job = None
+        self.spinner_label = ctk.CTkLabel(
+            log_header,
+            text="",
+            width=24,
+            font=("Segoe UI", 15, "bold"),
+            text_color="#2f8cff",
+        )
+        self.spinner_label.grid(row=0, column=1, padx=(8, 0), sticky="w")
+
+        self.log = ctk.CTkTextbox(
+            log_frame,
+            height=110,
+            corner_radius=12,
+            fg_color="#07111f",
+            border_width=1,
+            border_color="#1f3147",
+            text_color="#d8e7fb",
+            font=("Consolas", 11),
+            wrap="word",
+        )
+        self.log.grid(row=1, column=0, padx=14, pady=(0, 14), sticky="nsew")
+        self.log.configure(state="disabled")
+
+        footer = ctk.CTkFrame(main_card, fg_color="transparent")
+        footer.grid(row=9, column=0, padx=28, pady=(0, 10), sticky="ew")
+        footer.grid_columnconfigure(1, weight=1)
+        footer.grid_columnconfigure(3, weight=1)
+
+        self.support_btn = self.create_footer_button(footer, "Wsparcie", self.open_support_page)
+        self.support_btn.grid(row=0, column=0, padx=(0, 8), sticky="w")
+        self.ui_text_widgets["support_btn"] = (self.support_btn, "Wsparcie")
+
+        self.fix_btn = self.create_footer_button(footer, "Fix", self.start_fix)
+        self.fix_btn.grid(row=0, column=2)
+        self.ui_text_widgets["fix_btn"] = (self.fix_btn, "Fix")
+
+        self.about_btn = self.create_footer_button(footer, "O mnie", self.show_about)
+        self.about_btn.grid(row=0, column=4, sticky="e")
+        self.ui_text_widgets["about_btn"] = (self.about_btn, "O mnie")
+
+        self.apply_language()
+
+    def apply_window_icon(self):
+        png_path = get_resource_path(APP_ICON_PNG_FILE_NAME)
+        ico_path = get_resource_path(APP_ICON_FILE_NAME)
+
+        if png_path.exists():
+            try:
+                self.window_icon_image = tk.PhotoImage(file=str(png_path))
+                self.iconphoto(True, self.window_icon_image)
+                return
+            except tk.TclError:
+                pass
+
+        if ico_path.exists():
+            try:
+                self.iconbitmap(str(ico_path))
+            except tk.TclError:
+                pass
+
+    def tr_ui(self, text):
+        if self.language == "EN":
+            return UI_TEXT_EN.get(text, text)
+        return text
+
+    def translate_message(self, text):
+        if self.language != "EN" or not isinstance(text, str):
+            return text
+
+        translated = MESSAGE_EXACT_EN.get(text)
+        if translated is not None:
+            return translated
+
+        translated = UI_TEXT_EN.get(text, text)
+        for source, target in sorted(MESSAGE_EXACT_EN.items(), key=lambda item: len(item[0]), reverse=True):
+            if len(source) >= 12:
+                translated = translated.replace(source, target)
+        for source, target in MESSAGE_REPLACEMENTS_EN:
+            translated = translated.replace(source, target)
+        translated = translated.replace(
+            "Subtitles: Subtitles were detected, but could not be downloaded or embedded.",
+            "Subtitles: detected, but could not be downloaded or embedded.",
+        )
+        translated = translated.replace(
+            "Subtitles: Subtitles were detected, but the subtitle file could not be downloaded.",
+            "Subtitles: detected, but the subtitle file could not be downloaded.",
+        )
+        translated = translated.replace(
+            "Subtitles: Subtitles were available and embedded in the video.",
+            "Subtitles: available and embedded in the video.",
+        )
+        translated = translated.replace(
+            "Subtitles: Subtitles were embedded into the video.",
+            "Subtitles: embedded into the video.",
+        )
+        translated = translated.replace(
+            "Subtitles: No regular or automatic Polish or English subtitles were found for this video.",
+            "Subtitles: no regular or automatic Polish or English subtitles were found for this video.",
+        )
+        translated = translated.replace(
+            "Subtitles: No regular Polish or English subtitles were found for this video.",
+            "Subtitles: no regular Polish or English subtitles were found for this video.",
+        )
+        return translated
+
+    def tr_quality_label(self, label):
+        if self.language == "EN":
+            return QUALITY_LABELS_EN.get(label, label)
+        return label
+
+    def quality_label_to_key(self, label):
+        return QUALITY_LABELS_PL_BY_EN.get(label, label)
+
+    def get_quality_options_for_mode(self, mode):
+        return [self.tr_quality_label(label) for label in MODE_QUALITY_OPTIONS[mode]]
+
+    def get_default_quality_for_mode(self, mode):
+        return self.tr_quality_label(MODE_DEFAULT_QUALITY[mode])
+
+    def change_language(self, selected_language):
+        if selected_language not in LANGUAGE_LABELS:
+            selected_language = "PL"
+        self.language = selected_language
+        self.language_var.set(selected_language)
+        if self.language == "EN":
+            self.subtitles_var.set(False)
+        self.apply_language()
+
+    def apply_language(self):
+        for widget, source_text in self.ui_text_widgets.values():
+            widget.configure(text=self.tr_ui(source_text))
+
+        if hasattr(self, "url_entry"):
+            self.url_entry.configure(
+                placeholder_text=self.tr_ui("Wklej link z YouTube, Facebooka albo innej obsługiwanej strony...")
+            )
+
+        for key, card in self.mode_cards.items():
+            card["title"].configure(text=self.tr_ui(card["title_text"]))
+            card["subtitle"].configure(text=self.tr_ui(card["subtitle_text"]))
+
+        if hasattr(self, "quality_box"):
+            current_key = self.quality_label_to_key(self.quality_var.get())
+            choices = self.get_quality_options_for_mode(self.selected_mode)
+            self.quality_box.configure(values=choices)
+            if current_key in MODE_QUALITY_OPTIONS[self.selected_mode]:
+                self.quality_box.set(self.tr_quality_label(current_key))
+            else:
+                self.quality_box.set(self.get_default_quality_for_mode(self.selected_mode))
+
+        if hasattr(self, "download_btn") and not self.trial_expired:
+            self.update_download_button_text()
+
+        if hasattr(self, "subtitle_status_var"):
+            self.update_subtitle_option_visibility()
+
+        self.status.set(self.translate_message(self.last_status_source))
+        self.render_log()
+
+    def create_footer_button(self, parent, text, command):
+        return ctk.CTkButton(
+            parent,
+            text=text,
+            width=112,
+            height=32,
+            corner_radius=10,
+            fg_color="transparent",
+            hover_color="#13243a",
+            border_width=1,
+            border_color="#203a59",
+            text_color="#aabbd2",
+            font=("Segoe UI", 12),
+            command=command,
+        )
+
+    def show_dialog(self, title, message, buttons=None, default=None):
+        if buttons is None:
+            buttons = [("OK", "ok")]
+
+        title = self.translate_message(title)
+        message = self.translate_message(message)
+        buttons = [(self.tr_ui(label), value) for label, value in buttons]
+        result = {"value": default if default is not None else buttons[0][1]}
+
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(title)
+        dialog.geometry("560x340")
+        dialog.resizable(False, False)
+        dialog.configure(fg_color=self.colors["card"])
+        dialog.transient(self)
+
+        frame = ctk.CTkFrame(
+            dialog,
+            corner_radius=18,
+            fg_color="#0d1726",
+            border_width=1,
+            border_color="#1f3147",
+        )
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+        frame.grid_columnconfigure(0, weight=1)
+        frame.grid_rowconfigure(1, weight=1)
+
+        title_label = ctk.CTkLabel(
+            frame,
+            text=title,
+            font=("Segoe UI", 18, "bold"),
+            text_color=self.colors["green"],
+            anchor="w",
+        )
+        title_label.grid(row=0, column=0, padx=20, pady=(18, 8), sticky="ew")
+
+        message_label = ctk.CTkLabel(
+            frame,
+            text=message,
+            font=("Segoe UI", 13),
+            text_color="#8ff0b5",
+            justify="left",
+            anchor="nw",
+            wraplength=490,
+        )
+        message_label.grid(row=1, column=0, padx=20, pady=(0, 12), sticky="nsew")
+
+        button_row = ctk.CTkFrame(frame, fg_color="transparent")
+        button_row.grid(row=2, column=0, padx=20, pady=(0, 18), sticky="e")
+
+        def close_with(value):
+            result["value"] = value
+            dialog.grab_release()
+            dialog.destroy()
+
+        for index, (label, value) in enumerate(buttons):
+            button = ctk.CTkButton(
+                button_row,
+                text=label,
+                width=112,
+                height=34,
+                corner_radius=10,
+                fg_color="transparent",
+                hover_color="#13243a",
+                border_width=1,
+                border_color="#203a59",
+                text_color="#24a8ff",
+                font=("Segoe UI", 12, "bold"),
+                command=lambda selected=value: close_with(selected),
+            )
+            button.grid(row=0, column=index, padx=(8 if index else 0, 0))
+
+        dialog.protocol("WM_DELETE_WINDOW", lambda: close_with(default))
+        dialog.update_idletasks()
+        self.update_idletasks()
+
+        parent_x = self.winfo_rootx()
+        parent_y = self.winfo_rooty()
+        parent_w = self.winfo_width()
+        parent_h = self.winfo_height()
+        dialog_w = dialog.winfo_width()
+        dialog_h = dialog.winfo_height()
+        x = parent_x + max((parent_w - dialog_w) // 2, 0)
+        y = parent_y + max((parent_h - dialog_h) // 2, 0)
+        dialog.geometry(f"+{x}+{y}")
+
+        dialog.grab_set()
+        dialog.focus_force()
+        self.wait_window(dialog)
+        return result["value"]
+
+    def show_info_dialog(self, title, message):
+        self.show_dialog(title, message, buttons=[("OK", "ok")], default="ok")
+
+    def ask_yes_no_dialog(self, title, message):
+        return self.show_dialog(
+            title,
+            message,
+            buttons=[("TAK", True), ("NIE", False)],
+            default=False,
+        )
+
+    def ask_yes_no_cancel_dialog(self, title, message):
+        return self.show_dialog(
+            title,
+            message,
+            buttons=[("TAK", True), ("NIE", False), ("ANULUJ", None)],
+            default=None,
+        )
+
+    def get_effective_trial_days(self):
+        try:
+            days = int(TRIAL_DAYS)
+        except Exception:
+            days = TRIAL_DEFAULT_DAYS
+
+        if not getattr(sys, "frozen", False) and days <= 0:
+            return 0
+
+        if days < 1 or days > TRIAL_MAX_DAYS:
+            return TRIAL_DEFAULT_DAYS
+        return days
+
+    def get_trial_build_started_at(self, now):
+        try:
+            build_started_at = int(TRIAL_BUILD_STARTED_AT)
+        except Exception:
+            build_started_at = 0
+        if build_started_at <= 0:
+            return now
+        return build_started_at
+
+    def get_trial_state_path(self):
+        paths = self.get_trial_state_paths()
+        return paths[0]
+
+    def get_trial_state_paths(self):
+        candidates = []
+
+        def add_candidate(base_dir):
+            if not base_dir:
+                return
+            try:
+                folder = Path(base_dir) / "VideoAndSoundDownloaderPro"
+                folder.mkdir(parents=True, exist_ok=True)
+                candidates.append(folder / TRIAL_STATE_FILE_NAME)
+            except Exception:
+                return
+
+        add_candidate(os.environ.get("LOCALAPPDATA"))
+        add_candidate(os.environ.get("APPDATA"))
+        add_candidate(os.environ.get("PROGRAMDATA"))
+
+        try:
+            home_folder = Path.home() / ".VideoAndSoundDownloaderPro"
+            home_folder.mkdir(parents=True, exist_ok=True)
+            candidates.append(home_folder / TRIAL_STATE_FILE_NAME)
+        except Exception:
+            pass
+
+        unique = []
+        seen = set()
+        for path in candidates:
+            key = str(path).lower()
+            if key not in seen:
+                seen.add(key)
+                unique.append(path)
+        return unique or [Path(TRIAL_STATE_FILE_NAME)]
+
+    def parse_trial_timestamp(self, value):
+        try:
+            timestamp = int(value)
+        except Exception:
+            return None
+        if timestamp < 946684800 or timestamp > 4102444800:
+            return None
+        return timestamp
+
+    def get_trial_signature_key(self):
+        material = "|".join(
+            [
+                str(TRIAL_STATE_SECRET),
+                str(TRIAL_BUILD_ID),
+                str(TRIAL_BUILD_STARTED_AT),
+                str(APP_VERSION),
+            ]
+        )
+        return hashlib.sha256(material.encode("utf-8", errors="replace")).digest()
+
+    def sign_trial_payload(self, payload):
+        encoded = json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        return hmac.new(self.get_trial_signature_key(), encoded, hashlib.sha256).hexdigest()
+
+    def create_trial_record(self, payload):
+        return {
+            "schema": TRIAL_STATE_SCHEMA,
+            "payload": payload,
+            "signature": self.sign_trial_payload(payload),
+        }
+
+    def create_trial_payload(self, first_started_at, last_seen_at, trial_days, build_started_at):
+        return {
+            "first_started_at": int(first_started_at),
+            "last_seen_at": int(last_seen_at),
+            "trial_days": int(trial_days),
+            "trial_build_id": str(TRIAL_BUILD_ID),
+            "trial_build_started_at": int(build_started_at),
+            "app_version": APP_VERSION,
+        }
+
+    def decode_trial_state_record(self, data, trial_days, build_started_at):
+        if not isinstance(data, dict):
+            return None, "stale"
+
+        if int(data.get("schema") or 0) == TRIAL_STATE_SCHEMA:
+            payload = data.get("payload")
+            signature = str(data.get("signature") or "")
+            if not isinstance(payload, dict) or not signature:
+                return None, "tampered"
+            expected_signature = self.sign_trial_payload(payload)
+            if not hmac.compare_digest(signature, expected_signature):
+                return None, "tampered"
+            if payload.get("trial_build_id") != TRIAL_BUILD_ID:
+                return None, "stale"
+            if int(payload.get("trial_days") or 0) != int(trial_days):
+                return None, "stale"
+            if int(payload.get("trial_build_started_at") or 0) != int(build_started_at):
+                return None, "stale"
+
+            first_started_at = self.parse_trial_timestamp(payload.get("first_started_at"))
+            last_seen_at = self.parse_trial_timestamp(payload.get("last_seen_at"))
+            if first_started_at is None or last_seen_at is None:
+                return None, "tampered"
+            return payload, None
+
+        if "signature" in data or "payload" in data:
+            return None, "tampered"
+
+        if data.get("trial_build_id") != TRIAL_BUILD_ID:
+            return None, "stale"
+        if int(data.get("trial_days") or 0) != int(trial_days):
+            return None, "stale"
+
+        first_started_at = self.parse_trial_timestamp(data.get("first_started_at"))
+        if first_started_at is None:
+            return None, "stale"
+        last_seen_at = self.parse_trial_timestamp(data.get("last_seen_at")) or first_started_at
+        return self.create_trial_payload(first_started_at, last_seen_at, trial_days, build_started_at), None
+
+    def read_trial_file_state(self, path):
+        try:
+            if not path.exists():
+                return None
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def write_trial_file_state(self, path, record):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def read_trial_registry_state(self):
+        if os.name != "nt":
+            return None
+        try:
+            import winreg
+
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, TRIAL_REGISTRY_KEY) as key:
+                value, _ = winreg.QueryValueEx(key, TRIAL_REGISTRY_VALUE_NAME)
+            if not isinstance(value, str) or not value.strip():
+                return None
+            return json.loads(value)
+        except Exception:
+            return None
+
+    def write_trial_registry_state(self, record):
+        if os.name != "nt":
+            return
+        try:
+            import winreg
+
+            with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, TRIAL_REGISTRY_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.SetValueEx(
+                    key,
+                    TRIAL_REGISTRY_VALUE_NAME,
+                    0,
+                    winreg.REG_SZ,
+                    json.dumps(record, ensure_ascii=False, separators=(",", ":")),
+                )
+        except Exception:
+            pass
+
+    def read_trial_state_candidates(self):
+        candidates = []
+        for path in self.get_trial_state_paths():
+            data = self.read_trial_file_state(path)
+            if data is not None:
+                candidates.append((str(path), data))
+
+        registry_data = self.read_trial_registry_state()
+        if registry_data is not None:
+            candidates.append(("HKCU:" + TRIAL_REGISTRY_KEY, registry_data))
+        return candidates
+
+    def write_trial_state_everywhere(self, record):
+        for path in self.get_trial_state_paths():
+            self.write_trial_file_state(path, record)
+        self.write_trial_registry_state(record)
+
+    def verify_self_integrity(self):
+        if getattr(self, "self_integrity_checked", False):
+            return not getattr(self, "self_integrity_failed", False)
+
+        self.self_integrity_checked = True
+        self.self_integrity_failed = False
+
+        if not getattr(sys, "frozen", False) or os.name != "nt":
+            return True
+
+        try:
+            powershell_path = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+            powershell = str(powershell_path) if powershell_path.exists() else "powershell.exe"
+            script = (
+                "$s=Get-AuthenticodeSignature -LiteralPath $args[0];"
+                "[pscustomobject]@{Status=[string]$s.Status;Subject=[string]$s.SignerCertificate.Subject}"
+                "|ConvertTo-Json -Compress"
+            )
+            result = subprocess.run(
+                [powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script, str(Path(sys.executable).resolve())],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                timeout=8,
+                creationflags=no_window_creation_flags(),
+            )
+            if result.returncode != 0 or not result.stdout.strip():
+                return True
+            info = json.loads(result.stdout)
+            status = str(info.get("Status") or "")
+            subject = str(info.get("Subject") or "")
+            signer_matches = all(marker in subject for marker in TRIAL_EXPECTED_SIGNER_MARKERS)
+            if status in SELF_INTEGRITY_BLOCK_STATUSES or not signer_matches:
+                self.self_integrity_failed = True
+                return False
+        except Exception:
+            return True
+
+        return True
+
+    def read_trial_state(self):
+        trial_days = self.get_effective_trial_days()
+        if trial_days <= 0:
+            return None
+
+        now = int(time.time())
+        build_started_at = self.get_trial_build_started_at(now)
+        valid_payloads = []
+        tampered = False
+
+        for _, data in self.read_trial_state_candidates():
+            payload, reason = self.decode_trial_state_record(data, trial_days, build_started_at)
+            if payload:
+                valid_payloads.append(payload)
+            elif reason == "tampered":
+                tampered = True
+
+        if valid_payloads:
+            first_started_at = min(int(payload["first_started_at"]) for payload in valid_payloads)
+            last_seen_at = max(int(payload["last_seen_at"]) for payload in valid_payloads)
+        else:
+            first_started_at = now
+            last_seen_at = now
+
+        reason = ""
+        if tampered:
+            reason = "Dane triala zostały zmienione lub uszkodzone."
+        elif now + TRIAL_CLOCK_TOLERANCE_SECONDS < build_started_at:
+            reason = "Zegar systemowy jest cofnięty względem daty kompilacji programu."
+        elif last_seen_at > now + TRIAL_CLOCK_TOLERANCE_SECONDS:
+            reason = "Wykryto cofnięcie zegara systemowego."
+        elif first_started_at > now + TRIAL_CLOCK_TOLERANCE_SECONDS:
+            reason = "Data startu triala jest nieprawidłowa."
+
+        last_seen_at = max(last_seen_at, now)
+        payload = self.create_trial_payload(first_started_at, last_seen_at, trial_days, build_started_at)
+        record = self.create_trial_record(payload)
+        self.write_trial_state_everywhere(record)
+
+        user_expires_at = first_started_at + int(trial_days) * TRIAL_DAY_SECONDS
+        build_expires_at = build_started_at + int(trial_days) * TRIAL_DAY_SECONDS
+        expires_at = min(user_expires_at, build_expires_at)
+        seconds_left = expires_at - now
+        days_left = max(0, (seconds_left + TRIAL_DAY_SECONDS - 1) // TRIAL_DAY_SECONDS)
+        expired = bool(reason) or seconds_left <= 0
+
+        return {
+            "expired": expired,
+            "days_left": int(days_left),
+            "expires_at": expires_at,
+            "state_path": self.get_trial_state_path(),
+            "reason": reason,
+        }
+
+    def format_trial_date(self, timestamp):
+        return time.strftime("%Y-%m-%d", time.localtime(timestamp))
+
+    def disable_app_for_expired_trial(self):
+        self.trial_expired = True
+        self.download_btn.configure(state="disabled", text=self.tr_ui("TRIAL WYGASŁ"))
+        self.stop_btn.configure(state="disabled")
+        self.url_entry.configure(state="disabled")
+        self.path_entry.configure(state="disabled")
+        self.quality_box.configure(state="disabled")
+        if hasattr(self, "subtitle_switch"):
+            self.subtitle_switch.configure(state="disabled")
+        self.paste_btn.configure(state="disabled")
+        self.browse_btn.configure(state="disabled")
+
+    def get_trial_block_message(self, state=None):
+        reason = ""
+        if isinstance(state, dict):
+            reason = str(state.get("reason") or "").strip()
+        if reason:
+            return reason + "\n\nPobieranie zostało zablokowane. Skontaktuj się z autorem, aby otrzymać nową wersję programu."
+        return "Czas testów tej wersji programu minął.\n\nPobieranie zostało zablokowane."
+
+    def block_app_for_trial(self, state=None):
+        self.disable_app_for_expired_trial()
+        message = self.get_trial_block_message(state)
+        self.set_status("Program został zablokowany. Pobieranie nie jest dostępne.")
+        self.log_line("Program zablokowany: " + message.replace("\n", " "))
+        self.show_info_dialog("Program zablokowany", message)
+
+    def block_app_for_integrity_failure(self):
+        self.disable_app_for_expired_trial()
+        message = (
+            "Plik programu nie przechodzi kontroli podpisu albo został zmieniony po kompilacji.\n\n"
+            "Pobieranie zostało zablokowane. Uruchom oryginalny, podpisany plik EXE."
+        )
+        self.set_status("Program został zablokowany przez kontrolę integralności.")
+        self.log_line("Program zablokowany: kontrola integralności pliku EXE nie powiodła się.")
+        self.show_info_dialog("Program zablokowany", message)
+
+    def enforce_trial_status(self):
+        self.trial_expired = False
+        self.set_status("Program jest dostępny bez limitu czasu.")
+        self.log_line(
+            "Na liczne prośby program został udostępniony wszystkim użytkownikom bez limitu czasu. "
+            "Jeśli doceniasz projekt, możesz przybić wirtualną piątkę, klikając przycisk Wsparcie."
+        )
+
+    def create_mode_card(self, parent, key, icon, title, subtitle, accent, column):
+        frame = ctk.CTkFrame(
+            parent,
+            height=98,
+            corner_radius=16,
+            fg_color=self.colors["panel"],
+            border_width=1,
+            border_color="#25374f",
+        )
+        frame.grid(row=0, column=column, padx=(0 if column == 0 else 8, 0), sticky="ew")
+        frame.grid_propagate(False)
+        frame.grid_columnconfigure(0, weight=1)
+
+        if key == "WEB_SCAN":
+            icon_label = ctk.CTkLabel(frame, text="", image=self.scan_card_icon, height=38)
+            icon_label.grid(row=0, column=0, pady=(10, 0))
+        elif key == "PLAYLISTA":
+            icon_label = ctk.CTkLabel(frame, text="", image=self.playlist_card_icon, height=38)
+            icon_label.grid(row=0, column=0, pady=(10, 0))
+        else:
+            icon_label = ctk.CTkLabel(
+                frame,
+                text=icon,
+                font=("Segoe UI", 28, "bold"),
+                text_color=accent,
+            )
+            icon_label.grid(row=0, column=0, pady=(10, 0))
+
+        title_label = ctk.CTkLabel(
+            frame,
+            text=title,
+            font=("Segoe UI", 14, "bold"),
+            text_color=accent,
+        )
+        title_label.grid(row=1, column=0)
+
+        subtitle_label = ctk.CTkLabel(
+            frame,
+            text=subtitle,
+            font=("Segoe UI", 10),
+            text_color=self.colors["muted"],
+        )
+        subtitle_label.grid(row=2, column=0, pady=(0, 8))
+
+        for widget in (frame, icon_label, title_label, subtitle_label):
+            widget.bind("<Button-1>", lambda _event, mode=key: self.select_mode(mode))
+
+        self.mode_cards[key] = {
+            "frame": frame,
+            "accent": accent,
+            "title": title_label,
+            "title_text": title,
+            "subtitle": subtitle_label,
+            "subtitle_text": subtitle,
+            "icon": icon_label,
+        }
+
+    def update_download_button_text(self):
+        button_text = {
+            "MP3": "↓   POBIERZ DŹWIĘK",
+            "MP4": "↓   POBIERZ WIDEO",
+            "PLAYLISTA": "↓   POBIERZ PLAYLISTĘ",
+            "WEB_SCAN": "WYKRYJ I POBIERZ",
+        }.get(self.selected_mode, "↓   POBIERZ")
+        if self.selected_mode == "WEB_SCAN":
+            self.download_btn.configure(
+                text="↓   " + self.tr_ui(button_text),
+                image=self.scan_action_icon,
+                compound="left",
+                text_color="#eef6ff",
+                font=("Segoe UI", 15, "bold"),
+            )
+        else:
+            self.download_btn.configure(
+                text=self.tr_ui(button_text), image=None, text_color="#eef6ff", font=("Segoe UI", 15, "bold")
+            )
+
+    def select_mode(self, mode):
+        self.selected_mode = mode
+
+        for key, card in self.mode_cards.items():
+            if key == mode:
+                card["frame"].configure(border_color=self.colors["border_strong"], fg_color=self.colors["panel_hover"])
+                card["subtitle"].configure(text_color="#cfe2ff")
+            else:
+                card["frame"].configure(border_color="#25374f", fg_color=self.colors["panel"])
+                card["subtitle"].configure(text_color=self.colors["muted"])
+
+        if hasattr(self, "quality_box"):
+            current_key = self.quality_label_to_key(self.quality_var.get())
+            choices = self.get_quality_options_for_mode(mode)
+            self.quality_box.configure(values=choices)
+            if current_key not in MODE_QUALITY_OPTIONS[mode]:
+                self.quality_box.set(self.get_default_quality_for_mode(mode))
+            else:
+                self.quality_box.set(self.tr_quality_label(current_key))
+
+        if hasattr(self, "download_btn") and not self.trial_expired:
+            self.update_download_button_text()
+
+        if hasattr(self, "subtitle_option_frame"):
+            self.update_subtitle_option_visibility()
+
+    def update_subtitle_option_visibility(self):
+        if self.language == "EN":
+            self.subtitles_var.set(False)
+            self.subtitle_option_frame.grid_remove()
+            self.subtitle_switch.configure(state="disabled")
+        elif self.selected_mode in SUBTITLE_MODES:
+            self.subtitle_option_frame.grid()
+            self.subtitle_switch.configure(state="normal")
+            self.subtitle_status_var.set(
+                self.tr_ui("Najpierw polskie, w razie braku angielskie. Napisy będą w filmie.")
+            )
+        else:
+            self.subtitle_option_frame.grid_remove()
+            self.subtitle_switch.configure(state="disabled")
+
+    def paste_from_clipboard(self):
+        try:
+            text = self.clipboard_get().strip()
+        except tk.TclError:
+            self.show_info_dialog("Schowek jest pusty", "Nie znaleziono tekstu do wklejenia.")
+            return
+
+        if text:
+            self.url.set(text)
+            self.url_entry.icursor("end")
+
+    def choose_folder(self):
+        folder = filedialog.askdirectory(initialdir=self.save_dir.get())
+        if folder:
+            self.save_dir.set(folder)
+
+    def record_session_download(self, count=1):
+        self.session_download_count += max(0, int(count or 0))
+
+    def open_downloaded_location(self):
+        if self.session_download_count <= 0:
+            self.show_info_dialog(
+                "Brak pobranych plików",
+                "W tej sesji programu nie pobrano jeszcze żadnego pliku.",
+            )
+            return
+        folder = self.save_dir.get().strip()
+        if not folder or not os.path.isdir(folder):
+            self.show_info_dialog("Błędny folder", "Wybrana lokalizacja zapisu nie istnieje.")
+            return
+        try:
+            if os.name == "nt":
+                os.startfile(folder)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            self.show_info_dialog("Nie można otworzyć folderu", f"Nie udało się otworzyć lokalizacji:\n{exc}")
+
+    def show_about(self):
+        self.show_info_dialog(
+            "O mnie",
+            f"Autor: {APP_AUTHOR}\n"
+            f"Wersja programu: {APP_VERSION}\n"
+            f"Nazwa: {APP_TITLE}\n\n"
+            "Disclaimer: Nie ponosimy odpowiedzialności za sposób wykorzystania programu. "
+            "Pobierając materiały, użytkownik potwierdza, że ma do tego prawo.",
+        )
+
+    def open_support_page(self):
+        webbrowser.open(SUPPORT_URL_EN if self.language == "EN" else SUPPORT_URL)
+
+    def open_project_repo_page(self):
+        webbrowser.open(PROJECT_REPO_URL)
+
+    def open_license(self):
+        if getattr(sys, "frozen", False):
+            app_dir = Path(sys.executable).resolve().parent
+        else:
+            app_dir = Path(__file__).resolve().parent
+
+        license_path = app_dir / LICENSE_FILE_NAME
+        if license_path.exists():
+            webbrowser.open(license_path.as_uri())
+        else:
+            webbrowser.open(LICENSE_URL)
+
+    def log_line(self, text):
+        self.after(0, self._log_line_ui, text)
+
+    def _log_line_ui(self, text):
+        self.log_source_lines.append(text)
+        self.log.configure(state="normal")
+        self.log.insert("end", self.translate_message(text) + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def render_log(self):
+        if not hasattr(self, "log"):
+            return
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        for source_text in self.log_source_lines:
+            self.log.insert("end", self.translate_message(source_text) + "\n")
+        self.log.see("end")
+        self.log.configure(state="disabled")
+
+    def update_status_from_process_line(self, text):
+        clean_text = text.strip()
+        if not clean_text:
+            return
+
+        progress_label = getattr(self, "active_progress_label", "") or "Mini: trwa kompresja..."
+        if clean_text.startswith("out_time="):
+            self.set_status(progress_label + " " + clean_text.replace("out_time=", "czas "))
+        elif clean_text.startswith("speed="):
+            self.set_status(progress_label + " " + clean_text)
+        elif clean_text.startswith("progress=end"):
+            if progress_label.startswith("Napisy:"):
+                self.set_status("Napisy: kończę wtapianie napisów...")
+            else:
+                self.set_status("Mini: kończę kompresję...")
+        elif clean_text.startswith("progress=continue"):
+            return
+        if clean_text.startswith("[download]") or clean_text.startswith("[ExtractAudio]"):
+            self.set_status(clean_text)
+        elif clean_text.startswith(
+            (
+                "[Merger]",
+                "[VideoConvertor]",
+                "[VideoRemuxer]",
+                "[EmbedSubtitle]",
+                "[SubtitlesConvertor]",
+                "[Fixup]",
+                "[MoveFiles]",
+                "[Metadata]",
+                "[ExtractAudio]",
+            )
+        ):
+            self.set_status(clean_text)
+        elif "ERROR:" in clean_text:
+            self.set_status("Błąd: sprawdź szczegóły w logu.")
+
+    def language_code_matches(self, code, base_language):
+        code = str(code or "").lower()
+        base_language = base_language.lower()
+        return code == base_language or code.startswith(base_language + "-") or code.startswith(base_language + "_")
+
+    def get_subtitle_language_priority(self):
+        if self.language == "EN":
+            return SUBTITLE_LANGUAGE_PRIORITY_EN
+        return SUBTITLE_LANGUAGE_PRIORITY_PL
+
+    def get_arte_subtitle_format_prefix(self, subtitle_code):
+        code = str(subtitle_code or "").lower()
+        if self.language_code_matches(code, "en"):
+            return "VO-STE_ANG_"
+        if self.language_code_matches(code, "pl"):
+            return "VO-STE_POL_"
+        return ""
+
+    def get_arte_link_format_prefix(self, link):
+        if not self.link_hostname_matches(link, ARTE_DOWNLOAD_DOMAINS):
+            return ""
+        return "VO-STE_ANG_" if self.language == "EN" else "VO-STE_POL_"
+
+    def choose_subtitle_language(self, video_info):
+        extractor_name = " ".join(
+            str(video_info.get(key) or "")
+            for key in ("extractor", "extractor_key", "webpage_url_domain")
+        ).lower()
+        is_arte = "arte" in extractor_name
+        sources = [
+            ("subtitles", "napisy"),
+            ("automatic_captions", "napisy automatyczne"),
+        ]
+        for source_key, source_label in sources:
+            tracks = video_info.get(source_key) or {}
+            if not isinstance(tracks, dict):
+                continue
+            available_codes = [code for code, items in tracks.items() if items]
+            for base_code, language_label in self.get_subtitle_language_priority():
+                for code in available_codes:
+                    if self.language_code_matches(code, base_code):
+                        return {
+                            "enabled": True,
+                            "found": True,
+                            "embedded": True,
+                            "burn_in": True,
+                            "code": code,
+                            "language_label": language_label,
+                            "source_label": source_label,
+                            "source_key": source_key,
+                            "arte_format_prefix": (
+                                self.get_arte_subtitle_format_prefix(code) if is_arte else ""
+                            ),
+                        }
+        return {"enabled": True, "found": False}
+
+    def prepare_subtitles_for_video(self, link, enabled):
+        arte_format_prefix = self.get_arte_link_format_prefix(link)
+        if not enabled or self.language == "EN":
+            return {
+                "enabled": False,
+                "found": False,
+                "arte_format_prefix": arte_format_prefix,
+            }
+
+        self.set_status("Sprawdzam napisy do filmu...")
+        self.log_line("Napisy: sprawdzam dostępność PL, potem EN.")
+        command = [
+            resolve_tool_command("yt-dlp"),
+            "--dump-single-json",
+            "--skip-download",
+            "--no-warnings",
+            "--no-playlist",
+            link,
+        ]
+        code, stdout, stderr = self.run_capture_command(command)
+
+        for line in stderr.splitlines()[-8:]:
+            clean_line = line.strip()
+            if clean_line:
+                self.log_line(clean_line)
+
+        if self.stop_requested:
+            return {"enabled": True, "found": False}
+
+        if code != 0 or not stdout.strip():
+            self.log_line("Napisy: nie udało się sprawdzić listy napisów dla tego filmu.")
+            return {"enabled": True, "found": False}
+
+        try:
+            video_info = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            self.log_line(f"Napisy: nie udało się odczytać danych napisów: {exc}")
+            return {"enabled": True, "found": False}
+
+        subtitle_info = self.choose_subtitle_language(video_info)
+        if arte_format_prefix and not subtitle_info.get("arte_format_prefix"):
+            subtitle_info["arte_format_prefix"] = arte_format_prefix
+        if subtitle_info.get("found"):
+            if subtitle_info.get("arte_format_prefix"):
+                self.log_line(
+                    "Napisy: ARTE - wybieram wariant wideo zgodny z językiem napisów."
+                )
+            self.log_line(
+                "Napisy: znaleziono język "
+                f"{subtitle_info['language_label']} ({subtitle_info['code']}), źródło: "
+                f"{subtitle_info['source_label']}. Zostaną zintegrowane z filmem."
+            )
+        else:
+            self.log_line("Napisy: nie znaleziono napisów po polsku ani po angielsku.")
+        return subtitle_info
+
+    def append_subtitle_options(self, command, subtitle_info):
+        if not subtitle_info or not subtitle_info.get("found"):
+            return
+
+        command.extend(
+            [
+                "--write-subs",
+                "--write-auto-subs",
+                "--sub-langs",
+                subtitle_info["code"],
+                "--embed-subs",
+                "--convert-subs",
+                "srt",
+            ]
+        )
+
+    def format_subtitle_result(self, subtitle_info):
+        if not subtitle_info or not subtitle_info.get("enabled"):
+            return ""
+        if subtitle_info.get("subtitle_download_failed"):
+            return (
+                "Napisy były wykryte, ale nie udało się ich pobrać lub zintegrować. "
+                "Film został pobrany bez napisów."
+            )
+        if subtitle_info.get("found"):
+            return (
+                "Napisy były dostępne i zostały zintegrowane z filmem. "
+                f"Język: {subtitle_info['language_label']} ({subtitle_info['code']})."
+            )
+        return "W tym filmie nie znaleziono napisów po polsku ani po angielsku."
+
+    def extract_subtitle_paths_from_output(self, output_lines):
+        paths = []
+        marker = "Writing video subtitles to:"
+        for line in output_lines or []:
+            if marker not in line:
+                continue
+            raw_path = line.split(marker, 1)[1].strip().strip('"')
+            if raw_path:
+                paths.append(Path(raw_path))
+        return paths
+
+    def extract_downloaded_video_paths_from_output(self, output_lines):
+        paths = []
+        json_marker = "__VSDP_FILE_JSON__:"
+        legacy_marker = "__VSDP_FILE__:"
+        for line in output_lines or []:
+            raw_path = ""
+            if json_marker in line:
+                payload = line.split(json_marker, 1)[1].strip()
+                try:
+                    decoded = json.loads(payload)
+                    raw_path = decoded if isinstance(decoded, str) else ""
+                except (TypeError, json.JSONDecodeError):
+                    raw_path = ""
+            elif legacy_marker in line:
+                raw_path = line.split(legacy_marker, 1)[1].strip().strip('"')
+            if raw_path:
+                paths.append(Path(raw_path))
+        return paths
+
+    def build_burn_subtitles_command(self, video_path, subtitle_path, output_path, video_format):
+        subtitle_filter = (
+            "subtitles=subtitles"
+            f"{subtitle_path.suffix.lower()}:force_style='"
+            "FontName=Arial,FontSize=22,"
+            "PrimaryColour=&H00FFFFFF&,OutlineColour=&H00000000&,"
+            "BorderStyle=1,Outline=2,Shadow=1,MarginV=28'"
+        )
+        command = [
+            resolve_tool_command("ffmpeg"),
+            "-y",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "warning",
+            "-i",
+            str(video_path),
+            "-vf",
+            subtitle_filter,
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-sn",
+            "-progress",
+            "pipe:1",
+        ]
+
+        if video_format == "webm" or output_path.suffix.lower() == ".webm":
+            command.extend(["-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-c:a", "libopus", "-b:a", "128k"])
+        else:
+            command.extend(["-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-c:a", "aac", "-b:a", "160k"])
+            if output_path.suffix.lower() == ".mp4":
+                command.extend(["-movflags", "+faststart"])
+
+        command.append(str(output_path))
+        return command
+
+    def burn_subtitles_into_recent_video(self, subtitle_info, video_format):
+        if (
+            not subtitle_info
+            or not subtitle_info.get("found")
+            or subtitle_info.get("subtitle_download_failed")
+        ):
+            return subtitle_info
+
+        download_output_lines = list(self.last_process_output_lines)
+        video_paths = [
+            file_path
+            for file_path in self.extract_downloaded_video_paths_from_output(download_output_lines)
+            if file_path.exists()
+        ]
+        subtitle_paths = [
+            file_path
+            for file_path in self.extract_subtitle_paths_from_output(download_output_lines)
+            if file_path.exists()
+        ]
+
+        if not video_paths:
+            subtitle_info["subtitle_download_failed"] = True
+            self.log_line("Napisy: nie udało się potwierdzić ścieżki pobranego pliku.")
+            return subtitle_info
+        if not subtitle_paths:
+            subtitle_info["subtitle_download_failed"] = True
+            self.log_line("Napisy: nie znaleziono pobranego pliku napisów do wtopienia.")
+            return subtitle_info
+
+        video_path = video_paths[-1]
+        subtitle_path = subtitle_paths[-1]
+        output_path = video_path.with_name(video_path.stem + ".vsdp_subtitled_tmp" + video_path.suffix)
+        if output_path.exists():
+            try:
+                output_path.unlink()
+            except OSError:
+                pass
+
+        self.set_status("Napisy: wtapiam napisy w obraz filmu...")
+        self.log_line("Napisy: wtapiam napisy w obraz filmu...")
+
+        burn_output_lines = []
+        try:
+            with tempfile.TemporaryDirectory(prefix="vsdp_subtitles_") as temp_dir:
+                temp_dir_path = Path(temp_dir)
+                safe_subtitle_path = temp_dir_path / ("subtitles" + subtitle_path.suffix.lower())
+                shutil.copy2(subtitle_path, safe_subtitle_path)
+                command = self.build_burn_subtitles_command(video_path, safe_subtitle_path, output_path, video_format)
+                code = self.run_download_command(
+                    command,
+                    cwd=str(temp_dir_path),
+                    progress_label="Napisy: wtapiam napisy w obraz filmu...",
+                )
+                burn_output_lines = list(self.last_process_output_lines)
+        except OSError as exc:
+            subtitle_info["subtitle_download_failed"] = True
+            self.log_line(f"Napisy: nie udało się wtopić napisów w obraz filmu. {exc}")
+            self.last_process_output_lines = download_output_lines + burn_output_lines
+            return subtitle_info
+
+        self.last_process_output_lines = download_output_lines + burn_output_lines
+        if code != 0 or not output_path.exists():
+            subtitle_info["subtitle_download_failed"] = True
+            self.log_line("Napisy: nie udało się wtopić napisów w obraz filmu.")
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                except OSError:
+                    pass
+            return subtitle_info
+
+        try:
+            video_path.unlink()
+            output_path.replace(video_path)
+        except OSError as exc:
+            subtitle_info["subtitle_download_failed"] = True
+            self.log_line(f"Napisy: nie udało się wtopić napisów w obraz filmu. {exc}")
+            return subtitle_info
+
+        subtitle_info["subtitle_burned_in"] = True
+        subtitle_info["subtitle_embed_verified"] = True
+        self.log_line("Napisy: napisy zostały wtopione w obraz filmu.")
+        return subtitle_info
+
+    def probe_media_duration_seconds(self, file_path):
+        command = [
+            resolve_tool_command("ffprobe"),
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(file_path),
+        ]
+        code, stdout, stderr = self.run_capture_command(command)
+        if code != 0:
+            clean_error = (stderr or stdout).strip()
+            if clean_error:
+                self.log_line("Mini: ffprobe: " + clean_error.splitlines()[-1])
+            return None
+        try:
+            duration = float(stdout.strip())
+        except ValueError:
+            return None
+        if duration <= 0:
+            return None
+        return duration
+
+    def probe_media_stream_types(self, file_path):
+        command = [
+            resolve_tool_command("ffprobe"),
+            "-v",
+            "error",
+            "-show_entries",
+            "stream=codec_type",
+            "-of",
+            "json",
+            str(file_path),
+        ]
+        code, stdout, stderr = self.run_capture_command(command)
+        if code != 0:
+            clean_error = (stderr or stdout).strip()
+            if clean_error:
+                self.log_line("Weryfikacja wideo - ffprobe: " + clean_error.splitlines()[-1])
+            return set()
+        try:
+            data = json.loads(stdout)
+        except (TypeError, json.JSONDecodeError):
+            return set()
+        return {
+            str(stream.get("codec_type") or "").lower()
+            for stream in data.get("streams") or []
+            if isinstance(stream, dict)
+        }
+
+    def media_streams_are_decodable(self, file_path):
+        """Decode a short sample so a corrupt video track is not mistaken for a valid one."""
+        command = [
+            resolve_tool_command("ffmpeg"),
+            "-v",
+            "error",
+            "-xerror",
+            "-i",
+            str(file_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a:0",
+            "-t",
+            "2",
+            "-f",
+            "null",
+            "-",
+        ]
+        code, stdout, stderr = self.run_capture_command(command, timeout=20)
+        if code == 0:
+            return True
+        clean_error = (stderr or stdout).strip()
+        if clean_error:
+            self.log_line("Weryfikacja dekodowania: " + clean_error.splitlines()[-1])
+        return False
+
+    def validate_recent_video_download(self):
+        paths = self.extract_downloaded_video_paths_from_output(self.last_process_output_lines)
+        if not paths or not paths[-1].exists():
+            marker = "Downloaded video validation failed: missing output path"
+            self.last_process_output_lines.append(marker)
+            self.log_line("Weryfikacja wideo: nie udało się odnaleźć zapisanego pliku.")
+            return False
+
+        file_path = paths[-1]
+        stream_types = self.probe_media_stream_types(file_path)
+        missing = []
+        if "video" not in stream_types:
+            missing.append("obrazu")
+        if "audio" not in stream_types:
+            missing.append("dźwięku")
+        if missing:
+            marker = "Downloaded video validation failed: missing " + " and ".join(missing)
+            self.last_process_output_lines.append(marker)
+            self.log_line(
+                f"Weryfikacja wideo: plik {file_path.name} nie zawiera " + " ani ".join(missing) + "."
+            )
+            return False
+
+        if not self.media_streams_are_decodable(file_path):
+            marker = "Downloaded video validation failed: video or audio stream is not decodable"
+            self.last_process_output_lines.append(marker)
+            self.log_line(
+                f"Weryfikacja wideo: plik {file_path.name} ma uszkodzony lub niedekodowalny strumień."
+            )
+            return False
+
+        self.log_line("Weryfikacja wideo: plik zawiera dekodowalny obraz i dźwięk.")
+        return True
+
+    def build_mini_compression_attempts(self, duration):
+        attempts = [
+            {"width": 426, "fps": 15, "audio_kbps": 32, "safety": 0.88},
+            {"width": 320, "fps": 12, "audio_kbps": 24, "safety": 0.78},
+            {"width": 256, "fps": 10, "audio_kbps": 16, "safety": 0.68},
+        ]
+        for attempt in attempts:
+            total_kbps = max(12, int((MINI_VIDEO_MAX_BYTES * 8 * attempt["safety"]) / duration / 1000))
+            audio_kbps = min(attempt["audio_kbps"], max(6, total_kbps // 3))
+            video_kbps = max(6, total_kbps - audio_kbps)
+            yield {
+                "width": attempt["width"],
+                "fps": attempt["fps"],
+                "audio_kbps": audio_kbps,
+                "video_kbps": video_kbps,
+            }
+
+    def format_size_mb(self, size_bytes):
+        return f"{size_bytes / 1024 / 1024:.1f} MB"
+
+    def format_mini_result_message(self, result):
+        if not result or not result.get("success"):
+            return "Mini: nie udało się skompresować pliku."
+
+        size_text = self.format_size_mb(result["size"])
+        original_text = self.format_size_mb(result["original_size"])
+        reduction = result.get("reduction_percent", 0)
+        width = result.get("width")
+        fps = result.get("fps")
+        video_kbps = result.get("video_kbps")
+        audio_kbps = result.get("audio_kbps")
+        if isinstance(width, str):
+            params = "bez ponownej kompresji"
+        else:
+            params = f"{width}px/{fps} fps, wideo {video_kbps}k, audio {audio_kbps}k"
+        if result.get("within_limit"):
+            return (
+                f"Mini: skompresowano do {size_text} z {original_text}. "
+                f"Zmniejszenie: {reduction:.1f}%. Parametry: {params}."
+            )
+        return (
+            f"Mini: nie udało się zejść do 20 MB, ale zapisano najmniejszy uzyskany plik: {size_text} "
+            f"z {original_text}. Zmniejszenie: {reduction:.1f}%. Parametry: {params}."
+        )
+
+    def compress_video_file_to_mini(self, file_path):
+        file_path = Path(file_path)
+        if not file_path.exists():
+            self.log_line(f"Mini: nie znaleziono pliku do kompresji: {file_path}")
+            return {"success": False, "reason": "missing_file"}
+
+        current_size = file_path.stat().st_size
+        if current_size <= MINI_VIDEO_MAX_BYTES:
+            result = {
+                "success": True,
+                "within_limit": True,
+                "size": current_size,
+                "original_size": current_size,
+                "reduction_percent": 0,
+                "width": "bez zmian",
+                "fps": "bez zmian",
+                "video_kbps": "bez zmian",
+                "audio_kbps": "bez zmian",
+            }
+            self.log_line(self.format_mini_result_message(result))
+            return result
+
+        duration = self.probe_media_duration_seconds(file_path)
+        if not duration:
+            self.log_line("Mini: nie udało się odczytać długości pliku, nie mogę bezpiecznie obliczyć kompresji.")
+            return {"success": False, "reason": "unknown_duration"}
+
+        self.set_status("Mini: kompresuję plik do maks. 20 MB...")
+        self.log_line(
+            f"Mini: kompresja do maks. 20 MB. Rozmiar wejściowy: {self.format_size_mb(current_size)}."
+        )
+
+        temp_path = file_path.with_name(file_path.stem + ".mini_tmp" + file_path.suffix)
+        best_path = file_path.with_name(file_path.stem + ".mini_best" + file_path.suffix)
+        best_result = None
+        for attempt in self.build_mini_compression_attempts(duration):
+            if temp_path.exists():
+                temp_path.unlink()
+
+            scale_filter = f"scale='min({attempt['width']},iw)':-2,fps={attempt['fps']}"
+            command = [
+                resolve_tool_command("ffmpeg"),
+                "-y",
+                "-nostats",
+                "-i",
+                str(file_path),
+                "-map",
+                "0:v:0",
+                "-map",
+                "0:a?",
+                "-map",
+                "0:s?",
+                "-vf",
+                scale_filter,
+                "-c:v",
+                "libx264",
+                "-preset",
+                "veryfast",
+                "-b:v",
+                f"{attempt['video_kbps']}k",
+                "-maxrate",
+                f"{attempt['video_kbps']}k",
+                "-bufsize",
+                f"{attempt['video_kbps'] * 2}k",
+                "-c:a",
+                "aac",
+                "-b:a",
+                f"{attempt['audio_kbps']}k",
+                "-ac",
+                "1",
+                "-c:s",
+                "mov_text",
+                "-movflags",
+                "+faststart",
+                "-progress",
+                "pipe:1",
+                str(temp_path),
+            ]
+            self.log_line(
+                "Mini: próba kompresji "
+                f"{attempt['width']}px/{attempt['fps']} fps, "
+                f"wideo {attempt['video_kbps']}k, audio {attempt['audio_kbps']}k."
+            )
+            self.log_line("Mini: to nie jest aktualizacja programu, tylko kompresja pliku przez FFmpeg.")
+            code = self.run_download_command(command, progress_label="Mini: trwa kompresja...")
+            if code != 0 or not temp_path.exists():
+                self.log_line("Mini: ta próba kompresji nie powiodła się.")
+                continue
+
+            output_size = temp_path.stat().st_size
+            reduction = max(0, (1 - (output_size / current_size)) * 100)
+            result = {
+                "success": True,
+                "within_limit": output_size <= MINI_VIDEO_MAX_BYTES,
+                "size": output_size,
+                "original_size": current_size,
+                "reduction_percent": reduction,
+                "width": attempt["width"],
+                "fps": attempt["fps"],
+                "video_kbps": attempt["video_kbps"],
+                "audio_kbps": attempt["audio_kbps"],
+            }
+            self.log_line(f"Mini: rozmiar po kompresji: {self.format_size_mb(output_size)}.")
+
+            if best_result is None or output_size < best_result["size"]:
+                if best_path.exists():
+                    best_path.unlink()
+                temp_path.replace(best_path)
+                best_result = result
+            else:
+                temp_path.unlink()
+
+            if result["within_limit"]:
+                break
+
+        if temp_path.exists():
+            temp_path.unlink()
+        if best_result and best_path.exists():
+            file_path.unlink()
+            best_path.replace(file_path)
+            message = self.format_mini_result_message(best_result)
+            self.log_line(message)
+            self.set_status(message)
+            return best_result
+
+        if best_path.exists():
+            best_path.unlink()
+        self.log_line("Mini: żadna próba kompresji nie zakończyła się poprawnie.")
+        return {"success": False, "reason": "compression_failed"}
+
+    def compress_recent_video_download_to_mini(self):
+        download_output_lines = list(self.last_process_output_lines)
+        paths = self.extract_downloaded_video_paths_from_output(download_output_lines)
+        if not paths:
+            self.log_line("Mini: nie udało się ustalić ścieżki pobranego pliku.")
+            return {"success": False, "reason": "missing_output_path"}
+
+        final_result = {"success": True, "within_limit": True, "results": []}
+        compression_output = []
+        for file_path in paths[-1:]:
+            result = self.compress_video_file_to_mini(file_path)
+            compression_output.extend(self.last_process_output_lines)
+            final_result["results"].append(result)
+            final_result["success"] = final_result["success"] and bool(result.get("success"))
+            final_result["within_limit"] = final_result["within_limit"] and bool(result.get("within_limit"))
+
+        self.last_process_output_lines = download_output_lines + compression_output
+        if final_result["results"]:
+            final_result.update(final_result["results"][-1])
+        return final_result
+
+    def cleanup_embedded_subtitle_files(self, subtitle_info):
+        if (
+            not subtitle_info
+            or not subtitle_info.get("found")
+            or not subtitle_info.get("embedded")
+            or subtitle_info.get("subtitle_download_failed")
+        ):
+            return
+
+        candidates = set()
+        for subtitle_path in self.extract_subtitle_paths_from_output(self.last_process_output_lines):
+            candidates.add(subtitle_path)
+            for extension in SUBTITLE_FILE_EXTENSIONS:
+                candidates.add(subtitle_path.with_suffix(extension))
+
+        removed = 0
+        for subtitle_path in candidates:
+            try:
+                if subtitle_path.suffix.lower() in SUBTITLE_FILE_EXTENSIONS and subtitle_path.exists():
+                    subtitle_path.unlink()
+                    removed += 1
+                    self.log_line(f"Napisy: usunięto osobny plik napisów: {subtitle_path.name}")
+            except OSError as exc:
+                self.log_line(f"Napisy: nie udało się usunąć osobnego pliku {subtitle_path.name}: {exc}")
+
+        if removed:
+            self.log_line("Napisy: w folderze został sam film z osadzonymi napisami.")
+
+    def set_status(self, text):
+        self.last_status_source = text
+        self.after(0, self.status.set, self.translate_message(text))
+
+    def set_busy(self, busy):
+        self.after(0, self._set_busy_ui, busy)
+
+    def _set_busy_ui(self, busy):
+        if busy:
+            self.download_btn.configure(state="disabled")
+            if hasattr(self, "fix_btn"):
+                self.fix_btn.configure(state="disabled")
+            self.stop_btn.configure(state="normal")
+            if hasattr(self, "subtitle_switch"):
+                self.subtitle_switch.configure(state="disabled")
+            self.start_spinner()
+        else:
+            if self.trial_expired:
+                self.download_btn.configure(state="disabled")
+                if hasattr(self, "fix_btn"):
+                    self.fix_btn.configure(state="normal")
+                self.stop_btn.configure(state="disabled")
+                if hasattr(self, "subtitle_switch"):
+                    self.subtitle_switch.configure(state="disabled")
+                self.stop_spinner()
+                return
+
+            self.download_btn.configure(state="normal")
+            if hasattr(self, "fix_btn"):
+                self.fix_btn.configure(state="normal")
+            self.stop_btn.configure(state="disabled")
+            if hasattr(self, "subtitle_switch"):
+                self.update_subtitle_option_visibility()
+            self.stop_spinner()
+
+    def start_spinner(self):
+        if self.spinner_job is None:
+            self.spinner_index = 0
+            self._animate_spinner()
+
+    def _animate_spinner(self):
+        self.spinner_label.configure(text=self.spinner_symbols[self.spinner_index])
+        self.spinner_index = (self.spinner_index + 1) % len(self.spinner_symbols)
+        self.spinner_job = self.after(120, self._animate_spinner)
+
+    def stop_spinner(self):
+        if self.spinner_job is not None:
+            self.after_cancel(self.spinner_job)
+            self.spinner_job = None
+        self.spinner_label.configure(text="")
+
+    def get_missing_components(self):
+        missing = []
+        if not command_exists("yt-dlp"):
+            missing.append(("program pobierania", YTDLP_ID))
+        if not command_exists("ffmpeg") or not command_exists("ffprobe"):
+            missing.append(("obsługa audio i wideo", FFMPEG_ID))
+        return missing
+
+    def check_components_only(self):
+        missing = self.get_missing_components()
+        if missing:
+            names = ", ".join(name for name, _ in missing)
+            if getattr(sys, "frozen", False):
+                self.set_status("Program nie jest kompletny. Pobierz ponownie pełną paczkę.")
+                self.log_line(f"Brakuje plików programu: {names}")
+            else:
+                self.set_status(f"Brakuje komponentów: {names}. Program zapyta o instalację przy pobieraniu.")
+                self.log_line(f"Brakuje komponentów: {names}")
+        else:
+            self.set_status("Gotowe. Wszystko jest gotowe, możesz rozpocząć pobieranie.")
+            self.log_line("OK: wszystko gotowe do pobierania.")
+
+    def start_fix(self):
+        with self.process_lock:
+            process_running = self.current_process and self.current_process.poll() is None
+
+        if process_running:
+            self.show_info_dialog("Proces trwa", "Poczekaj na zakończenie obecnej operacji albo użyj STOP.")
+            return
+
+        self.stop_requested = False
+        self.set_busy(True)
+        threading.Thread(target=self.run_fix_checks, daemon=True).start()
+
+    def ask_yes_no_from_worker(self, title, message):
+        result = {"value": False}
+        completed = threading.Event()
+
+        def ask_on_ui():
+            try:
+                result["value"] = self.ask_yes_no_dialog(title, message)
+            finally:
+                completed.set()
+
+        self.after(0, ask_on_ui)
+        completed.wait()
+        return result["value"]
+
+    def show_info_from_worker(self, title, message):
+        self.after(0, lambda: self.show_info_dialog(title, message))
+
+    def show_repo_fix_dialog(self, message):
+        self.show_info_dialog("Fix", message)
+        self.open_project_repo_page()
+
+    def show_repo_fix_dialog_from_worker(self, message):
+        self.after(0, lambda: self.show_repo_fix_dialog(message))
+
+    def fetch_latest_ytdlp_release_info(self):
+        request = urllib.request.Request(
+            YTDLP_LATEST_RELEASE_API,
+            headers={
+                "Accept": "application/vnd.github+json",
+                "User-Agent": f"{APP_TITLE}/{APP_VERSION}",
+            },
+        )
+        with urllib.request.urlopen(request, timeout=25) as response:
+            data = json.loads(response.read().decode("utf-8", errors="replace"))
+
+        tag = str(data.get("tag_name") or "").strip()
+        exe_url = ""
+        for asset in data.get("assets") or []:
+            if str(asset.get("name") or "").lower() == "yt-dlp.exe":
+                exe_url = str(asset.get("browser_download_url") or "").strip()
+                break
+
+        return {
+            "tag": tag,
+            "exe_url": exe_url or YTDLP_LATEST_EXE_URL,
+            "html_url": str(data.get("html_url") or "").strip(),
+        }
+
+    def detect_ytdlp_problem(self):
+        if not command_exists("yt-dlp"):
+            return "missing"
+
+        self.set_status("Fix: sprawdzam wersję yt-dlp...")
+        command = [resolve_tool_command("yt-dlp"), "--version"]
+        try:
+            code, stdout, stderr = self.run_capture_command(command)
+        except Exception as exc:
+            self.log_line(f"Fix: yt-dlp nie uruchamia się poprawnie: {exc}")
+            return "broken"
+
+        output = (stdout or stderr).strip()
+        if output:
+            self.log_line("Fix: wykryta wersja yt-dlp: " + output.splitlines()[0])
+        if code != 0:
+            return "broken"
+
+        self.latest_ytdlp_release = None
+        try:
+            latest = self.fetch_latest_ytdlp_release_info()
+            self.latest_ytdlp_release = latest
+            latest_tag = latest.get("tag") or ""
+            if latest_tag:
+                self.log_line("Fix: najnowsza wersja yt-dlp na GitHubie: " + latest_tag)
+                current_version = output.splitlines()[0].strip()
+                if current_version and current_version != latest_tag:
+                    return "outdated"
+        except Exception as exc:
+            self.log_line(f"Fix: nie udało się sprawdzić najnowszej wersji yt-dlp na GitHubie: {exc}")
+
+        recent_output = "\n".join(self.last_process_output_lines[-80:]).lower()
+        ytdlp_markers = [
+            "unable to extract",
+            "signature extraction failed",
+            "nsig extraction failed",
+            "player response",
+            "unable to download webpage",
+            "youtube said",
+            "this video is unavailable",
+            "requested format is not available",
+            "http error 403",
+            "forbidden",
+        ]
+        if any(marker in recent_output for marker in ytdlp_markers):
+            return "last_error"
+
+        return None
+
+    def update_ytdlp(self, problem):
+        try:
+            return self.download_latest_ytdlp_from_github()
+        except Exception as exc:
+            self.log_line(f"Fix: pobieranie yt-dlp z GitHuba nie powiodło się: {exc}")
+
+        if problem == "missing":
+            if command_exists("winget"):
+                return self.install_one_package("yt-dlp", YTDLP_ID)
+            self.log_line("Fix: nie znaleziono yt-dlp ani winget do automatycznej instalacji.")
+            return False
+
+        ytdlp_command = self.prepare_writable_ytdlp_for_update()
+        command = [ytdlp_command, "-U"]
+        self.log_line("Fix: uruchamiam aktualizację yt-dlp.")
+        code = self.run_download_command(command)
+        if code == 0:
+            return True
+
+        self.log_line(f"Fix: aktualizacja yt-dlp przez -U zwróciła kod {code}.")
+        if os.name == "nt" and command_exists("winget"):
+            self.log_line("Fix: próbuję aktualizacji yt-dlp przez winget.")
+            command = [
+                "winget",
+                "upgrade",
+                "--id",
+                YTDLP_ID,
+                "-e",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+            ]
+            code = self.run_download_command(command)
+            return code == 0
+
+        return False
+
+    def prepare_writable_ytdlp_for_update(self):
+        current = Path(resolve_tool_command("yt-dlp"))
+        target = get_external_tools_dir() / get_tool_executable_name("yt-dlp")
+
+        if current == target:
+            return str(target)
+
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if current.exists():
+                shutil.copy2(current, target)
+                self.log_line("Fix: przygotowano aktualizowalną kopię yt-dlp w folderze danych aplikacji.")
+                return str(target)
+        except Exception as exc:
+            self.log_line(f"Fix: nie udało się przygotować kopii yt-dlp w folderze danych aplikacji: {exc}")
+
+        return str(current)
+
+    def download_latest_ytdlp_from_github(self):
+        latest = getattr(self, "latest_ytdlp_release", None) or self.fetch_latest_ytdlp_release_info()
+        tag = latest.get("tag") or "latest"
+        exe_url = latest.get("exe_url") or YTDLP_LATEST_EXE_URL
+        target = get_external_tools_dir() / get_tool_executable_name("yt-dlp")
+        temp_target = target.with_name(target.stem + ".download" + target.suffix)
+        backup_target = target.with_suffix(target.suffix + ".bak")
+
+        target.parent.mkdir(parents=True, exist_ok=True)
+        self.log_line(f"Fix: pobieram yt-dlp {tag} z oficjalnego GitHuba.")
+
+        request = urllib.request.Request(
+            exe_url,
+            headers={"User-Agent": f"{APP_TITLE}/{APP_VERSION}"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                with temp_target.open("wb") as handle:
+                    shutil.copyfileobj(response, handle)
+
+            if temp_target.stat().st_size < 1024 * 1024:
+                raise RuntimeError("pobrany plik yt-dlp.exe jest podejrzanie mały")
+
+            code, stdout, stderr = self.run_capture_command([str(temp_target), "--version"])
+            version = (stdout or stderr).strip().splitlines()[0] if (stdout or stderr).strip() else ""
+            if code != 0 or not version:
+                raise RuntimeError("pobrany yt-dlp.exe nie uruchamia się poprawnie")
+
+            backup_target.unlink(missing_ok=True)
+            try:
+                if target.exists():
+                    target.replace(backup_target)
+                temp_target.replace(target)
+
+                code, stdout, stderr = self.run_capture_command([str(target), "--version"])
+                version = (stdout or stderr).strip().splitlines()[0] if (stdout or stderr).strip() else ""
+                if code != 0 or not version:
+                    raise RuntimeError("pobrany yt-dlp.exe nie uruchamia się poprawnie")
+            except Exception:
+                target.unlink(missing_ok=True)
+                if backup_target.exists():
+                    backup_target.replace(target)
+                raise
+            else:
+                backup_target.unlink(missing_ok=True)
+        finally:
+            temp_target.unlink(missing_ok=True)
+
+        self.log_line("Fix: zainstalowana wersja yt-dlp: " + version)
+        self.log_line("Fix: aktualizacja działa od razu w tej kopii programu.")
+        if tag != "latest" and version != tag:
+            self.log_line(f"Fix: uwaga, GitHub zgłasza {tag}, a plik uruchamia się jako {version}.")
+        return True
+
+    def handle_frozen_fix_problem(self, problem):
+        latest = getattr(self, "latest_ytdlp_release", None) or {}
+        latest_tag = latest.get("tag") or "najnowsza"
+        self.set_status("Fix: wykryto problem. Pobierz nową wersję programu z GitHuba.")
+        self.log_line("Fix: w wersji EXE nie aktualizuję plików programu lokalnie.")
+        self.log_line(f"Fix: po naprawie autora szukaj nowej wersji tutaj: {PROJECT_REPO_URL}")
+
+        if problem == "outdated":
+            reason = f"Wykryto nieaktualny komponent yt-dlp. Najnowsza znana wersja: {latest_tag}."
+        elif problem == "missing":
+            reason = "Nie znaleziono komponentu yt-dlp w tej paczce programu."
+        elif problem == "last_error":
+            reason = "Ostatni błąd pobierania wygląda na problem po stronie yt-dlp albo zmian w serwisie."
+        else:
+            reason = "Wykryto problem z komponentem yt-dlp."
+
+        message = (
+            reason
+            + "\n\nTa skompilowana wersja EXE nie naprawia samej siebie, żeby nie naruszać podpisu "
+            + "i nie zostawiać dodatkowych plików przy programie.\n\n"
+            + "Po naprawie przez autora pobierz nową wersję programu z repozytorium:\n"
+            + PROJECT_REPO_URL
+        )
+        self.show_repo_fix_dialog_from_worker(message)
+
+    def run_fix_checks(self):
+        try:
+            self.set_status("Fix: sprawdzam podstawowe błędy...")
+            self.log_line("Fix: sprawdzam podstawowe błędy.")
+            problem = self.detect_ytdlp_problem()
+
+            if self.stop_requested:
+                self.set_status("Fix przerwany przez użytkownika.")
+                self.log_line("Fix: przerwany przez użytkownika.")
+                return
+
+            if not problem:
+                self.set_status("Sprawdzanie nie wykryło problemów.")
+                self.log_line("Sprawdzanie nie wykryło problemów.")
+                return
+
+            self.set_status("Wykryto problem z yt-dlp.")
+            self.log_line("Wykryto problem z yt-dlp.")
+            self.log_line("Wymagana jest aktualizacja bazy/API.")
+            self.log_line("Po potwierdzeniu zostanie pobrana lokalna aktualizacja yt-dlp.")
+
+            consent = self.ask_yes_no_from_worker(
+                "Fix yt-dlp",
+                "Wykryto problem z yt-dlp.\n\n"
+                "Wymagana jest aktualizacja bazy/API.\n"
+                "Po potwierdzeniu zostanie przeprowadzona lokalna aktualizacja yt-dlp "
+                "w folderze danych aplikacji. Program będzie jej używał od razu, "
+                "bez modyfikowania własnego pliku EXE.\n\n"
+                "Czy rozpocząć aktualizację?",
+            )
+            if not consent:
+                self.set_status("Aktualizacja anulowana.")
+                self.log_line("Fix: użytkownik anulował aktualizację.")
+                return
+
+            self.set_status("Fix: aktualizuję yt-dlp...")
+            ok = self.update_ytdlp(problem)
+            if ok and not self.stop_requested:
+                self.set_status("Aktualizacja zakończyła się powodzeniem.")
+                self.log_line("Aktualizacja zakończyła się powodzeniem.")
+                self.show_info_from_worker("Fix", "Aktualizacja zakończyła się powodzeniem.")
+            elif self.stop_requested:
+                self.set_status("Fix przerwany przez użytkownika.")
+                self.log_line("Fix: przerwany przez użytkownika.")
+            else:
+                self.set_status("Aktualizacja yt-dlp nie powiodła się.")
+                self.log_line("Fix: aktualizacja yt-dlp nie powiodła się. Szczegóły są powyżej w logu.")
+                self.show_info_from_worker("Fix", "Aktualizacja yt-dlp nie powiodła się. Sprawdź log.")
+        finally:
+            self.set_busy(False)
+
+    def confirm_missing_components(self):
+        missing = self.get_missing_components()
+        if not missing:
+            self.log_line("OK: wszystko gotowe do pobierania.")
+            return []
+
+        names = ", ".join(name for name, _ in missing)
+
+        if getattr(sys, "frozen", False):
+            self.set_status("Program nie jest kompletny. Pobierz ponownie pełną paczkę.")
+            self.show_info_dialog(
+                "Program nie jest gotowy",
+                "Ta kopia programu nie zawiera wszystkich plików potrzebnych do pobierania.\n\n"
+                "Pobierz ponownie pełną paczkę programu od autora.",
+            )
+            return None
+
+        if os.name != "nt":
+            self.show_info_dialog(
+                "Brak komponentów",
+                "Brakuje yt-dlp lub FFmpeg.\n"
+                "Automatyczna instalacja jest przygotowana dla Windows z winget.",
+            )
+            return None
+
+        if not command_exists("winget"):
+            self.show_info_dialog(
+                "Brak winget",
+                "Nie znaleziono winget. Zainstaluj yt-dlp i FFmpeg ręcznie albo zaktualizuj App Installer.",
+            )
+            return None
+
+        consent = self.ask_yes_no_dialog(
+            "Wymagana instalacja",
+            "Do poprawnego działania programu trzeba zainstalować:\n\n"
+            f"- {names}\n\n"
+            "Program użyje winget. Może pojawić się okno zgody systemu Windows.\n\n"
+            "Czy wyrażasz zgodę na instalację?",
+        )
+
+        if not consent:
+            self.set_status("Instalacja anulowana. Brak wymaganych komponentów.")
+            self.log_line("Użytkownik nie wyraził zgody na instalację.")
+            return None
+
+        return missing
+
+    def install_one_package(self, name, package_id):
+        self.set_status(f"Instaluję {name}...")
+        self.log_line(f"Instalacja: {name} ({package_id})")
+        self.log_line("Może pojawić się okno zgody systemu Windows. Nie zamykaj programu.")
+
+        command = [
+            "winget",
+            "install",
+            "--id",
+            package_id,
+            "-e",
+            "--accept-package-agreements",
+            "--accept-source-agreements",
+        ]
+
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=INSTALL_TIMEOUT_SECONDS,
+                creationflags=no_window_creation_flags(),
+            )
+
+            output = (completed.stdout or "") + "\n" + (completed.stderr or "")
+            clean_lines = []
+            for line in output.splitlines():
+                line = line.strip()
+                if not line or line in {"-", "\\", "|", "/"}:
+                    continue
+                clean_lines.append(line)
+
+            if clean_lines:
+                self.log_line("\n".join(clean_lines[-20:]))
+
+            if completed.returncode == 0:
+                self.log_line(f"OK: instalator zakończył pracę dla {name}.")
+                return True
+
+            output_lower = output.lower()
+            if "already installed" in output_lower or "is already installed" in output_lower:
+                self.log_line(f"OK: {name} jest już zainstalowany.")
+                return True
+
+            self.log_line(f"UWAGA: winget zwrócił kod {completed.returncode} przy {name}.")
+            return False
+
+        except subprocess.TimeoutExpired:
+            self.log_line(
+                f"TIMEOUT: instalacja {name} trwała ponad {INSTALL_TIMEOUT_SECONDS} sekund. "
+                "Proces został przerwany, żeby program nie wyglądał na zawieszony."
+            )
+            self.after(
+                0,
+                lambda: self.show_info_dialog(
+                    "Instalacja trwa zbyt długo",
+                    f"Instalacja {name} trwała zbyt długo i została zatrzymana.\n\n"
+                    "Możliwe, że winget czekał na zgodę systemu, administratora albo miał problem sieciowy.\n"
+                    "Spróbuj uruchomić program ponownie albo zainstalować komponent ręcznie.",
+                ),
+            )
+            return False
+        except Exception as exc:
+            self.log_line(f"Błąd instalacji {name}: {exc}")
+            return False
+
+    def ensure_components_installed(self, missing):
+        if not missing:
+            return True
+
+        all_ok = True
+        for name, package_id in missing:
+            if self.stop_requested:
+                return False
+            ok = self.install_one_package(name, package_id)
+            all_ok = all_ok and ok
+
+        missing_after = self.get_missing_components()
+        if not missing_after:
+            self.set_status("Komponenty są gotowe.")
+            return True
+
+        names_after = ", ".join(name for name, _ in missing_after)
+        self.set_status(f"Instalacja zakończona, ale program nadal nie widzi: {names_after}.")
+        self.after(
+            0,
+            lambda: self.show_info_dialog(
+                "Uruchom ponownie program",
+                "Instalacja została zakończona, ale Windows może odświeżyć ścieżki PATH dopiero "
+                "po ponownym uruchomieniu programu.\n\n"
+                "Zamknij aplikację i otwórz ją ponownie.",
+            ),
+        )
+        return False
+
+    def classify_download_error(self, output_lines=None):
+        text = "\n".join(output_lines or self.last_process_output_lines or []).lower()
+        rules = [
+            (("drm", "widevine", "fairplay", "playready"), "Zabezpieczenie DRM", "Materiał jest chroniony DRM. Program nie omija tego zabezpieczenia.", False),
+            (("paywall", "payment required", "premium account", "paid subscription", "subscribers only"), "Wymagany dostęp do treści", "Serwis wymaga aktywnego dostępu lub subskrypcji. Jeśli bieżąca sesja ma uprawnienia, uwierzytelnij ją i ponów próbę.", True),
+            (("login required", "sign in", "log in", "authentication required", "cookies are no longer valid", "fresh cookies"), "Wymagane logowanie", "Serwis wymaga zalogowania albo prawidłowej sesji/cookies. Zaloguj się legalnie w serwisie i ponów próbę.", True),
+            (("not available in your country", "geo-restricted", "georestricted", "not available in your region"), "Ograniczenie regionalne", "Serwis zgłosił rzeczywistą blokadę regionalną. Sprawdź legalny dostęp, sieć, adres IP i sesję, a następnie ponów próbę.", True),
+            (("private video", "this video is private"), "Film prywatny", "Film jest prywatny i bieżąca sesja nie ma do niego dostępu.", False),
+            (("video has been removed", "video unavailable", "this video is unavailable", "http error 410"), "Materiał niedostępny", "Film został usunięty albo nie jest już dostępny w serwisie.", False),
+            (("age-restricted", "age restricted", "confirm your age"), "Ograniczenie wiekowe", "Materiał ma ograniczenie wiekowe i wymaga uwierzytelnionej sesji uprawnionego użytkownika.", True),
+            (("downloaded video validation failed",), "Niepełny plik wideo", "Pobrany plik nie zawiera jednocześnie obrazu i dźwięku. Program odrzucił niepełny wynik.", False),
+            (("requested format is not available", "no video formats found", "no formats found", "only images are available"), "Brak strumienia", "Nie znaleziono obsługiwanego strumienia audio lub wideo dla wybranego formatu i jakości.", False),
+            (("unable to extract", "unsupported url", "no video could be found"), "Nie można wykryć źródła", "Strona nie ujawnia obsługiwanego źródła albo zastosowała zabezpieczenia uniemożliwiające jego wykrycie.", False),
+            (("http error 401", "http error 403", "forbidden", "unauthorized"), "Problem z autoryzacją", "Serwis odrzucił autoryzację. Przyczyną może być sesja, cookies, uprawnienia albo zabezpieczenie źródła.", True),
+        ]
+        for markers, title, message, retryable in rules:
+            if any(marker in text for marker in markers):
+                return {"title": title, "message": message, "retryable": retryable}
+        return {"title": "Błąd pobierania", "message": "Nie udało się pobrać materiału. Szczegóły techniczne zapisano w logu.", "retryable": True}
+
+    def output_suggests_unavailable_format(self, output_lines=None):
+        text = "\n".join(output_lines or self.last_process_output_lines or []).lower()
+        markers = (
+            "requested format is not available",
+            "no video formats found",
+            "no formats found",
+            "only images are available",
+        )
+        return any(marker in text for marker in markers)
+
+    def collect_available_video_formats(self, info):
+        if not isinstance(info, dict):
+            return {"heights": [], "containers": [], "has_video": False, "has_unknown_height": False}
+
+        formats = info.get("formats") or []
+        if not formats:
+            for entry in info.get("entries") or []:
+                inventory = self.collect_available_video_formats(entry)
+                if inventory["has_video"]:
+                    return inventory
+
+        heights = set()
+        containers = set()
+        has_video = False
+        has_unknown_height = False
+
+        for fmt in formats:
+            if not isinstance(fmt, dict):
+                continue
+            video_codec = str(fmt.get("vcodec") or "none").lower()
+            if video_codec == "none":
+                continue
+
+            has_video = True
+            container = str(fmt.get("ext") or "").strip().upper()
+            if container and container not in {"MHTML", "NONE", "UNKNOWN"}:
+                containers.add(container)
+
+            height = fmt.get("height")
+            try:
+                height = int(height) if height else None
+            except (TypeError, ValueError):
+                height = None
+
+            if not height:
+                resolution = str(fmt.get("resolution") or "")
+                match = re.search(r"\b\d{2,5}x(\d{2,5})\b", resolution, flags=re.IGNORECASE)
+                if match:
+                    height = int(match.group(1))
+
+            if height and height > 0:
+                heights.add(height)
+            else:
+                has_unknown_height = True
+
+        return {
+            "heights": sorted(heights, reverse=True),
+            "containers": sorted(containers),
+            "has_video": has_video,
+            "has_unknown_height": has_unknown_height,
+        }
+
+    def inspect_available_video_formats(self, link):
+        self.set_status("Sprawdzam formaty dostępne dla tego linku...")
+        self.log_line(f"Sprawdzanie dostępnych formatów: {link}")
+
+        for _, access_options in self.get_browser_retry_variants(link):
+            command = [
+                resolve_tool_command("yt-dlp"),
+                "--dump-single-json",
+                "--skip-download",
+                "--no-warnings",
+                "--no-playlist",
+                "--playlist-items",
+                "1",
+            ]
+            command.extend(access_options)
+            command.append(link)
+            code, stdout, stderr = self.run_capture_command(command, timeout=45)
+            if self.stop_requested:
+                return None
+            if code != 0 or not stdout.strip():
+                if stderr.strip():
+                    self.log_line("Sprawdzanie dostępnych formatów: " + stderr.strip().splitlines()[-1])
+                continue
+            try:
+                return self.collect_available_video_formats(json.loads(stdout))
+            except (TypeError, json.JSONDecodeError) as exc:
+                self.log_line(f"Sprawdzanie dostępnych formatów: nieprawidłowe dane JSON: {exc}")
+
+        return None
+
+    def format_available_video_formats(self, inventory):
+        if not inventory:
+            return "Nie udało się odczytać listy dostępnych formatów dla tego linku."
+        if not inventory["has_video"]:
+            return "Serwis udostępnia tylko strumień audio — nie znaleziono żadnego strumienia wideo."
+
+        lines = []
+        heights = inventory["heights"]
+        if heights:
+            resolution_labels = ", ".join(f"{height}p" for height in heights)
+            lines.append(f"Dostępne rozdzielczości wideo: {resolution_labels}.")
+            lines.append(f"Najwyższa wykryta rozdzielczość: {heights[0]}p.")
+        else:
+            lines.append(
+                "Serwis udostępnia strumienie wideo, ale nie podaje ich rozdzielczości. "
+                "Spróbuj wybrać MP4 Najlepsza."
+            )
+
+        if inventory["containers"]:
+            lines.append(f"Formaty źródłowe wideo: {', '.join(inventory['containers'])}.")
+        if inventory["has_unknown_height"] and heights:
+            lines.append("Część wariantów nie zawiera informacji o rozdzielczości.")
+        return "\n".join(lines)
+
+    def classify_download_error_with_formats(self, link, video_format, video_quality):
+        error = self.classify_download_error()
+        if error["title"] != "Brak strumienia" or not self.output_suggests_unavailable_format():
+            return error
+
+        inventory = self.inspect_available_video_formats(link)
+        availability = self.format_available_video_formats(inventory)
+        selected_variant = f"{str(video_format).upper()} {video_quality}"
+        message = (
+            f"Nie udało się pobrać wybranego wariantu {selected_variant}.\n\n"
+            f"{availability}"
+        )
+        status_message = "Wybierz jedną z dostępnych jakości albo wariant MP4 Najlepsza."
+        if inventory and inventory["has_video"]:
+            quality_to_height = {
+                "4K": 2160,
+                "1440p": 1440,
+                "1080p": 1080,
+                "720p": 720,
+                "480p": 480,
+                "360p": 360,
+            }
+            requested_height = quality_to_height.get(video_quality)
+            selected_quality_is_visible = (
+                video_quality == "Najlepsza"
+                or requested_height in inventory["heights"]
+            )
+            if selected_quality_is_visible:
+                status_message = (
+                    "Wybrana jakość jest widoczna w źródle, ale nie udało się pobrać "
+                    "kompletnego strumienia obrazu i dźwięku. Szczegóły są w logu."
+                )
+            message += "\n\n" + status_message
+        return {
+            "title": "Brak strumienia",
+            "message": message,
+            "status_message": status_message,
+            "retryable": False,
+        }
+
+    def media_item_from_info(self, info, fallback_url):
+        if not isinstance(info, dict):
+            return None
+        formats = info.get("formats") or []
+        direct_url = str(info.get("url") or "").strip()
+        if not self.is_direct_media_url(direct_url):
+            progressive = [
+                fmt for fmt in formats if isinstance(fmt, dict)
+                and fmt.get("vcodec") not in {None, "none"}
+                and fmt.get("acodec") not in {None, "none"}
+                and self.is_direct_media_url(str(fmt.get("url") or ""))
+            ]
+            video_streams = [
+                fmt for fmt in formats if isinstance(fmt, dict)
+                and fmt.get("vcodec") not in {None, "none"}
+                and self.is_direct_media_url(str(fmt.get("manifest_url") or fmt.get("url") or ""))
+            ]
+            candidates = progressive or video_streams
+            if candidates:
+                best = max(candidates, key=lambda fmt: (int(fmt.get("height") or 0), float(fmt.get("tbr") or 0)))
+                direct_url = str(best.get("manifest_url") or best.get("url") or "").strip()
+        if not self.is_direct_media_url(direct_url):
+            return None
+        return {
+            "url": direct_url,
+            "source_url": fallback_url,
+            "title": str(
+                info.get("title")
+                or info.get("fulltitle")
+                or self.translate_message("Wykryty materiał")
+            ).strip(),
+            "duration": info.get("duration"),
+            "extractor": str(info.get("extractor_key") or info.get("extractor") or "źródło multimediów"),
+            "is_live": info.get("is_live") is True
+            or str(info.get("live_status") or "").lower() == "is_live",
+        }
+
+    def is_direct_media_url(self, url):
+        if not str(url).startswith(("http://", "https://")):
+            return False
+        parsed = urlparse(str(url))
+        path = parsed.path.lower()
+        lowered = str(url).lower()
+        return (
+            path.endswith(DIRECT_MEDIA_EXTENSIONS)
+            or any(marker in lowered for marker in (".m3u8?", ".mpd?", "format=mp4", "format=m3u8", "format=mpd"))
+            or any(marker in path for marker in ("/manifest/", "/playlist/", "/master.m3u", "/video-stream/", "/audio-stream/"))
+        )
+
+    def detected_media_format(self, url):
+        path = urlparse(str(url)).path.lower()
+        suffix = Path(path).suffix.lower().lstrip(".")
+        if suffix == "m3u8" or "format=m3u8" in str(url).lower():
+            return "HLS"
+        if suffix == "mpd" or "format=mpd" in str(url).lower():
+            return "DASH"
+        if suffix in {"ism", "ismv", "isma"}:
+            return "SMOOTH"
+        return suffix.upper() if suffix else "STREAM"
+
+    def safe_detected_filename_stem(self, title):
+        """Return a Windows-safe literal filename stem for a detected media title."""
+        stem = re.sub(r'[<>:"/\\|?*%\x00-\x1f]', "_", str(title or "Wykryty materiał"))
+        stem = re.sub(r"\s+", " ", stem).strip(" .")
+        if not stem:
+            stem = "Wykryty materiał"
+        if stem.upper() in {
+            "CON", "PRN", "AUX", "NUL",
+            *(f"COM{number}" for number in range(1, 10)),
+            *(f"LPT{number}" for number in range(1, 10)),
+        }:
+            stem = f"_{stem}"
+        return stem[:180].rstrip(" .") or "Wykryty materiał"
+
+    def unique_detected_filename_stem(self, title, folder, extension, reserved_stems):
+        """Keep every selected item separate, including duplicate titles and existing files."""
+        base = self.safe_detected_filename_stem(title)
+        candidate = base
+        number = 2
+        normalized_extension = str(extension or "").lstrip(".")
+        while (
+            candidate.casefold() in reserved_stems
+            or os.path.exists(os.path.join(folder, f"{candidate}.{normalized_extension}"))
+        ):
+            suffix = f" ({number})"
+            candidate = base[: max(1, 180 - len(suffix))].rstrip(" .") + suffix
+            number += 1
+        reserved_stems.add(candidate.casefold())
+        return candidate
+
+    def is_likely_media_page_link(self, candidate, parent_url):
+        parsed = urlparse(candidate)
+        parent = urlparse(parent_url)
+        if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != parent.netloc.lower():
+            return False
+        path = parsed.path.lower()
+        return any(marker in path for marker in ("/wideo/", "/video/", "/wideo-program/", "/video-program/", "/watch/", "/player/"))
+
+    def read_web_document(self, url, timeout=20):
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": BROWSER_RETRY_USER_AGENT, "Accept-Language": BROWSER_RETRY_ACCEPT_LANGUAGE},
+        )
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content_type = str(response.headers.get("Content-Type") or "").lower()
+            if "html" not in content_type and "javascript" not in content_type and "json" not in content_type:
+                return ""
+            return response.read(5 * 1024 * 1024).decode(
+                response.headers.get_content_charset() or "utf-8", errors="replace"
+            )
+
+    def append_document_media(self, document, document_url, results, extractor_label):
+        parser = MediaHTMLParser(document_url)
+        parser.feed(document)
+        sources = parser.sources + self.extract_media_urls_from_document(document, document_url)
+        for index, source in enumerate(dict.fromkeys(sources), start=1):
+            if self.is_direct_media_url(source):
+                media_name = (
+                    Path(urlparse(source).path).name
+                    or parser.page_title
+                    or f"{self.translate_message('Materiał')} {index}"
+                )
+                results.append({
+                    "url": source,
+                    "source_url": document_url,
+                    "title": media_name,
+                    "duration": None,
+                    "extractor": extractor_label,
+                    "is_live": False,
+                    "page_url": document_url,
+                })
+        return parser
+
+    def extract_media_urls_from_document(self, document, page_url):
+        """Find media URLs in HTML as well as escaped JavaScript/JSON player configs."""
+        decoded = html_unescape(str(document or ""))
+        for escaped, plain in ((r"\/", "/"), (r"\u002f", "/"), (r"\u002F", "/"), (r"\x2f", "/"), (r"\x2F", "/")):
+            decoded = decoded.replace(escaped, plain)
+
+        extensions = "|".join(re.escape(ext.lstrip(".")) for ext in DIRECT_MEDIA_EXTENSIONS)
+        patterns = [
+            rf"https?://[^\s\"'<>\\]+?\.(?:{extensions})(?:\?[^\s\"'<>\\]*)?",
+            rf"(?P<url>//[^\s\"'<>\\]+?\.(?:{extensions})(?:\?[^\s\"'<>\\]*)?)",
+            rf"[\"'](?P<url>/[^\"'<>]+?\.(?:{extensions})(?:\?[^\"'<>]*)?)[\"']",
+        ]
+        found = []
+        for pattern in patterns:
+            for match in re.finditer(pattern, decoded, flags=re.IGNORECASE):
+                value = match.groupdict().get("url") or match.group(0)
+                value = value.rstrip("),;]")
+                absolute = urljoin(page_url, value)
+                if self.is_direct_media_url(absolute):
+                    found.append(absolute)
+        return list(dict.fromkeys(found))
+
+    def collect_media_info(self, info, fallback_url, results):
+        if not isinstance(info, dict):
+            return
+        entries = info.get("entries") or []
+        if entries:
+            for entry in entries:
+                self.collect_media_info(entry, fallback_url, results)
+            return
+        item = self.media_item_from_info(info, fallback_url)
+        if item:
+            results.append(item)
+
+    def discover_media_on_page(self, link):
+        self.set_status("Analizuję strukturę strony i szukam materiałów...")
+        self.log_line(f"Wykrywanie multimediów na stronie: {link}")
+        command = [resolve_tool_command("yt-dlp"), "--ignore-errors", "--skip-download", "--dump-single-json", link]
+        code, stdout, stderr = self.run_capture_command(command)
+        diagnostic = (stderr or "") + "\n" + (stdout if code != 0 else "")
+        results = []
+        if stdout.strip():
+            try:
+                self.collect_media_info(json.loads(stdout), link, results)
+            except json.JSONDecodeError:
+                self.log_line("Wykrywanie: ekstraktor nie zwrócił poprawnych danych JSON.")
+
+        if not any(word in diagnostic.lower() for word in ("drm", "widevine", "fairplay", "playready")):
+            try:
+                html = self.read_web_document(link, timeout=25)
+                parser = self.append_document_media(html, link, results, "DOM/JavaScript")
+                child_links = list(dict.fromkeys(
+                    candidate for candidate in parser.links if self.is_likely_media_page_link(candidate, link)
+                ))[:50]
+                if child_links:
+                    self.log_line(f"Wykrywanie: znaleziono podstron materiałów: {len(child_links)}")
+                for child_index, child_url in enumerate(child_links, start=1):
+                    if self.stop_requested:
+                        break
+                    self.set_status(f"Analizuję podstrony materiałów: {child_index}/{len(child_links)}...")
+                    try:
+                        child_html = self.read_web_document(child_url, timeout=15)
+                        self.append_document_media(child_html, child_url, results, "Podstrona DOM/JavaScript")
+                    except Exception as child_exc:
+                        self.log_line(f"Pominięto podstronę {child_url}: {child_exc}")
+            except Exception as exc:
+                diagnostic += "\n" + str(exc)
+                self.log_line(f"Analiza HTML: {exc}")
+
+        unique = []
+        seen = set()
+        for item in results:
+            key = item["url"]
+            if key not in seen:
+                seen.add(key)
+                unique.append(item)
+        if unique:
+            return unique, None
+        return [], self.classify_download_error(diagnostic.splitlines())
+
+    def start_web_discovery(self, link, folder, preset, missing, embed_subtitles):
+        try:
+            if not self.ensure_components_installed(missing):
+                return
+            items, error = self.discover_media_on_page(link)
+            if self.stop_requested:
+                self.set_status("Wykrywanie przerwane.")
+                return
+            if error:
+                self.set_status(error["message"])
+                dialog_message = error["message"]
+                if error["title"] == "Nie można wykryć źródła":
+                    suggestion = (
+                        "Wskazówka: ta strona może zawierać zbyt wiele różnych treści. "
+                        "Otwórz konkretną podstronę wybranego artykułu, filmu lub materiału, "
+                        "skopiuj jej adres i uruchom WYKRYJ ponownie."
+                    )
+                    dialog_message += "\n\n" + suggestion
+                    self.log_line(suggestion)
+                self.after(
+                    0,
+                    lambda: self.show_info_dialog(error["title"], dialog_message),
+                )
+                return
+            self.log_line(f"Wykryto materiałów: {len(items)}")
+            self.set_status(f"Wykryto materiałów: {len(items)}. Wybierz pozycje z listy.")
+            self.after(0, lambda: self.show_media_selection_dialog(items, folder, preset, embed_subtitles))
+        finally:
+            self.set_busy(False)
+
+    def show_media_selection_dialog(self, items, folder, preset, embed_subtitles):
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(self.translate_message(f"Wykryte materiały ({len(items)})"))
+        dialog.geometry("780x500")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        dialog.grab_set()
+        ctk.CTkLabel(
+            dialog,
+            text=self.translate_message(
+                "Wybierz jeden, kilka lub wszystkie materiały (dwuklik pobiera wybraną pozycję)"
+            ),
+            font=("Segoe UI", 16, "bold"),
+        ).pack(padx=18, pady=(18, 2), anchor="w")
+        ctk.CTkLabel(
+            dialog,
+            text=self.translate_message(
+                "Aby zaznaczyć kilka pozycji: przytrzymaj lewy Ctrl i klikaj lewym przyciskiem myszy."
+            ),
+            font=("Segoe UI", 11),
+            text_color="#b9c7d8",
+        ).pack(padx=18, pady=(0, 8), anchor="w")
+        style = ttk.Style(dialog)
+        style.configure("Media.Treeview", background="#0f1b2b", fieldbackground="#0f1b2b", foreground="#e8f1ff", rowheight=29, borderwidth=0, font=("Segoe UI", 10))
+        style.configure("Media.Treeview.Heading", background="#142b46", foreground="#e7c873", font=("Segoe UI", 10, "bold"))
+        style.map("Media.Treeview", background=[("selected", "#1769aa")], foreground=[("selected", "#ffffff")])
+        list_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        list_frame.pack(fill="both", expand=True, padx=18, pady=8)
+        list_frame.grid_rowconfigure(0, weight=1)
+        list_frame.grid_columnconfigure(0, weight=1)
+        media_list = ttk.Treeview(list_frame, columns=("format", "material", "url"), show="headings", selectmode="extended", style="Media.Treeview")
+        media_list.heading("format", text="Format")
+        media_list.heading("material", text=self.translate_message("Materiał"))
+        media_list.heading("url", text=self.translate_message("Bezpośredni adres"))
+        media_list.column("format", width=78, minwidth=68, stretch=False, anchor="center")
+        media_list.column("material", width=430, minwidth=250, stretch=False)
+        media_list.column("url", width=700, minwidth=300, stretch=False)
+        horizontal_scrollbar = ttk.Scrollbar(list_frame, orient="horizontal", command=media_list.xview)
+        vertical_scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=media_list.yview)
+        media_list.configure(xscrollcommand=horizontal_scrollbar.set, yscrollcommand=vertical_scrollbar.set)
+        media_list.grid(row=0, column=0, sticky="nsew")
+        vertical_scrollbar.grid(row=0, column=1, sticky="ns")
+        horizontal_scrollbar.grid(row=1, column=0, sticky="ew")
+        for index, item in enumerate(items, start=1):
+            duration = f" ({int(item['duration']) // 60}:{int(item['duration']) % 60:02d})" if item.get("duration") else ""
+            live_label = (
+                self.translate_message(" [AKTYWNA TRANSMISJA — NIEDOSTĘPNA]")
+                if item.get("is_live")
+                else ""
+            )
+            media_list.insert("", "end", iid=str(index - 1), values=(self.detected_media_format(item["url"]), item["title"] + duration + live_label, item["url"]))
+
+        buttons = ctk.CTkFrame(dialog, fg_color="transparent")
+        buttons.pack(fill="x", padx=18, pady=(4, 18))
+        def select_all():
+            media_list.selection_set(media_list.get_children())
+        def copy_links():
+            indices = [int(item_id) for item_id in media_list.selection()]
+            if not indices:
+                self.show_info_dialog("Brak wyboru", "Zaznacz co najmniej jeden materiał.")
+                return
+            links = "\n".join(items[index]["url"] for index in indices)
+            self.clipboard_clear()
+            self.clipboard_append(links)
+            self.set_status("Skopiowano bezpośrednie linki do schowka.")
+        def begin_download(_event=None):
+            indices = [int(item_id) for item_id in media_list.selection()]
+            if not indices:
+                self.show_info_dialog("Brak wyboru", "Zaznacz co najmniej jeden materiał.")
+                return
+            selected = [items[index] for index in indices]
+            dialog.destroy()
+            self.stop_requested = False
+            self.set_busy(True)
+            threading.Thread(target=self.download_discovered_media, args=(selected, folder, preset, embed_subtitles), daemon=True).start()
+        ctk.CTkButton(
+            buttons,
+            text=self.translate_message("Zaznacz wszystkie"),
+            command=select_all,
+        ).pack(side="left")
+        ctk.CTkButton(
+            buttons,
+            text=self.translate_message("Kopiuj link"),
+            command=copy_links,
+        ).pack(side="left", padx=8)
+        ctk.CTkButton(
+            buttons,
+            text=self.translate_message("Pobierz zaznaczone"),
+            command=begin_download,
+        ).pack(side="right")
+        media_list.bind("<Double-Button-1>", begin_download)
+
+    def download_discovered_media(self, items, folder, preset, embed_subtitles):
+        completed = 0
+        failures = []
+        reserved_stems = set()
+        try:
+            total = len(items)
+            for index, item in enumerate(items, start=1):
+                if self.stop_requested:
+                    break
+                self.set_status(f"Wykryte materiały: pobieranie {index}/{total}...")
+                self.log_line(f"--- Materiał {index}/{total}: {item['title']} ---")
+                live_error = {
+                    "title": "Aktywna transmisja",
+                    "message": "Materiał jest trwającym, niezakończonym streamem. Spróbuj ponownie po zakończeniu transmisji.",
+                }
+                if item.get("is_live"):
+                    failures.append((item["title"], live_error))
+                    self.log_line("Pominięto aktywną transmisję wykrytą podczas skanowania.")
+                    continue
+                check_url = item.get("source_url") or item["url"]
+                if self.reject_active_livestream(check_url, show_dialog=False):
+                    if self.stop_requested:
+                        break
+                    failures.append((item["title"], live_error))
+                    continue
+                subtitle_info = {"enabled": False, "found": False}
+                filename_stem = self.unique_detected_filename_stem(
+                    item["title"], folder, preset["format"], reserved_stems
+                )
+                output_template = os.path.join(folder, f"{filename_stem}.%(ext)s")
+                self.log_line(f"Nazwa pliku: {filename_stem}.{preset['format']}")
+                if preset["kind"] == "audio":
+                    command = [
+                        resolve_tool_command("yt-dlp"), "--newline", "--no-keep-video", "--no-playlist",
+                        "-x", "--audio-format", preset["format"], "--audio-quality", preset["audio_quality"],
+                        "-o", output_template, item["url"],
+                    ]
+                    code = self.run_download_command(command)
+                else:
+                    subtitle_info = self.prepare_subtitles_for_video(item["url"], embed_subtitles)
+                    code, subtitle_info = self.run_video_download_with_subtitle_fallback(
+                        item["url"], folder, preset["format"], preset["quality"], False, subtitle_info,
+                        output_template=output_template,
+                    )
+                if code == 0:
+                    if preset.get("quality") == "Mini":
+                        mini_result = self.compress_recent_video_download_to_mini()
+                        if not mini_result or not mini_result.get("success"):
+                            failures.append((item["title"], {"title": "Błąd konwersji", "message": "Nie udało się skompresować materiału w trybie Mini."}))
+                            continue
+                    if preset["kind"] == "video":
+                        self.cleanup_embedded_subtitle_files(subtitle_info)
+                    completed += 1
+                    self.record_session_download()
+                else:
+                    if preset["kind"] == "video":
+                        error = self.classify_download_error_with_formats(
+                            item.get("source_url") or item["url"],
+                            preset["format"],
+                            preset["quality"],
+                        )
+                    else:
+                        error = self.classify_download_error()
+                    failures.append((item["title"], error))
+                    self.log_line(f"Przyczyna: {failures[-1][1]['message']}")
+            if self.stop_requested:
+                message = f"Operację przerwano. Pobrano {completed}/{total}."
+            elif failures:
+                details = "\n".join(f"• {title}: {reason['message']}" for title, reason in failures[:8])
+                message = f"Pobrano {completed}/{total}.\n\nNiepowodzenia:\n{details}"
+            else:
+                message = f"Pobrano wszystkie materiały: {completed}/{total}."
+            self.set_status(message.splitlines()[0])
+            self.after(0, lambda: self.show_info_dialog("Wynik pobierania", message))
+        finally:
+            self.set_busy(False)
+
+    def link_hostname_matches(self, link, domains):
+        try:
+            hostname = (urlparse(str(link)).hostname or "").lower().rstrip(".")
+        except (TypeError, ValueError):
+            return False
+        return any(
+            hostname == domain or hostname.endswith("." + domain)
+            for domain in domains
+        )
+
+    def is_standard_download_service_link(self, link):
+        return self.link_hostname_matches(link, STANDARD_DOWNLOAD_DOMAINS)
+
+    def is_facebook_download_link(self, link):
+        return self.link_hostname_matches(link, FACEBOOK_DOWNLOAD_DOMAINS)
+
+    def show_standard_download_mode_hint(self):
+        title = "Użyj zwykłego trybu pobierania"
+        message = (
+            "Do pobrania tego materiału użyj zwykłego trybu: Pobierz dźwięk, Pobierz wideo "
+            "albo Pobierz całą playlistę.\n\n"
+            "Tryb WYKRYJ służy do wyszukiwania treści na stronach, które nie udostępniają "
+            "prostych, bezpośrednich linków do materiałów."
+        )
+        self.set_status("Ten link należy pobrać w zwykłym trybie.")
+        self.log_line(message)
+        self.show_info_dialog(title, message)
+
+    def confirm_facebook_discovery(self):
+        message = (
+            "Do pobierania linków z Facebooka zalecany jest zwykły tryb: Pobierz dźwięk, "
+            "Pobierz wideo albo Pobierz całą playlistę.\n\n"
+            "Tryb WYKRYJ służy głównie do wyszukiwania treści na stronach, które nie "
+            "udostępniają prostych, bezpośrednich linków do materiałów.\n\n"
+            "Czy mimo to uruchomić wykrywanie?"
+        )
+        if self.ask_yes_no_dialog("Facebook — zalecany zwykły tryb", message):
+            self.log_line(
+                "Użytkownik wybrał wykrywanie linku z Facebooka pomimo zalecenia zwykłego trybu."
+            )
+            return True
+
+        self.set_status(
+            "Wykrywanie anulowane. Wybierz tryb pobierania dźwięku, wideo albo playlisty."
+        )
+        self.log_line("Użytkownik zrezygnował z wykrywania linku z Facebooka.")
+        return False
+
+    def prepare_download_request(self, force_playlist=False):
+        link = self.url.get().strip()
+        folder = self.save_dir.get().strip()
+
+        if not link:
+            self.show_info_dialog("Brak linku", "Wklej link do filmu lub materiału.")
+            return None
+
+        if not folder or not os.path.isdir(folder):
+            self.show_info_dialog("Błędny folder", "Wybierz poprawny folder zapisu.")
+            return None
+
+        download_playlist = force_playlist
+
+        if force_playlist:
+            self.log_line("Tryb playlisty: program pobierze całą listę.")
+        elif is_probably_youtube_playlist(link):
+            answer = self.ask_yes_no_cancel_dialog(
+                "Uwaga - wykryto playlistę",
+                "Wklejony link wygląda jak playlista YouTube.\n\n"
+                "TAK - pobierz wszystkie pliki z playlisty.\n"
+                "NIE - pobierz tylko pojedynczy utwór/film z tego linku.\n"
+                "ANULUJ - przerwij operację.",
+            )
+
+            if answer is None:
+                self.set_status("Pobieranie anulowane.")
+                self.log_line("Anulowano po wykryciu playlisty.")
+                return None
+
+            if answer is True:
+                download_playlist = True
+                self.log_line("Użytkownik wybrał pobranie całej playlisty.")
+            else:
+                old_link = link
+                link = strip_playlist_params(link)
+                download_playlist = False
+                self.log_line("Użytkownik wybrał pobranie tylko pojedynczego utworu.")
+                self.log_line(f"Link oczyszczony z playlisty: {link}")
+                if old_link != link:
+                    self.url.set(link)
+
+        return link, folder, download_playlist
+
+    def start_download(self):
+        self.trial_expired = False
+
+        preset_label = self.quality_label_to_key(self.quality_box.get())
+        preset = QUALITY_PRESETS.get(preset_label)
+        if not preset:
+            self.show_info_dialog("Brak formatu", "Wybierz jakość albo format pobierania.")
+            return
+
+        current_link = self.url.get().strip()
+        if self.selected_mode == "WEB_SCAN" and current_link:
+            if self.is_standard_download_service_link(current_link):
+                self.show_standard_download_mode_hint()
+                return
+            if (
+                self.is_facebook_download_link(current_link)
+                and not self.confirm_facebook_discovery()
+            ):
+                return
+
+        request = self.prepare_download_request(force_playlist=self.selected_mode == "PLAYLISTA")
+        if not request:
+            return
+
+        missing = self.confirm_missing_components()
+        if missing is None:
+            return
+
+        link, folder, download_playlist = request
+        self.stop_requested = False
+        self.set_busy(True)
+        embed_subtitles = (
+            preset["kind"] == "video"
+            and self.selected_mode in SUBTITLE_MODES
+            and self.language != "EN"
+            and bool(self.subtitles_var.get())
+        )
+
+        if self.selected_mode == "WEB_SCAN":
+            target = self.start_web_discovery
+            args = (link, folder, preset, missing, embed_subtitles)
+        elif preset["kind"] == "audio":
+            target = self.download_audio
+            args = (
+                link,
+                folder,
+                preset["format"],
+                preset["audio_quality"],
+                download_playlist,
+                missing,
+            )
+        elif download_playlist:
+            target = self.download_video_playlist
+            args = (
+                link,
+                folder,
+                preset["format"],
+                preset["quality"],
+                missing,
+                embed_subtitles,
+            )
+        else:
+            target = self.download_video
+            args = (
+                link,
+                folder,
+                preset["format"],
+                preset["quality"],
+                download_playlist,
+                missing,
+                embed_subtitles,
+            )
+
+        threading.Thread(target=target, args=args, daemon=True).start()
+
+    def run_download_command(self, command, cwd=None, progress_label=None):
+        output_lines = []
+        last_logged_progress_at = 0.0
+        self.log_line("Proces: " + self.describe_command_for_log(command))
+        previous_progress_label = getattr(self, "active_progress_label", "")
+        self.active_progress_label = progress_label or ""
+        with self.process_lock:
+            self.current_process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                errors="replace",
+                shell=False,
+                cwd=cwd,
+                env=get_process_environment(),
+                creationflags=no_window_creation_flags(),
+            )
+
+        try:
+            if self.current_process.stdout:
+                for line in self.current_process.stdout:
+                    clean_line = line.replace(chr(13), "").rstrip()
+                    if clean_line:
+                        output_lines.append(clean_line)
+                        if not clean_line.startswith(("__VSDP_FILE__:", "__VSDP_FILE_JSON__:")):
+                            # Przy dużych plikach --newline potrafi wygenerować tysiące
+                            # wpisów postępu. Kolejka Tkintera zaczynała je odtwarzać już
+                            # po konwersji, co wyglądało jak zawieszenie przy sprzątaniu.
+                            is_frequent_progress = clean_line.startswith("[download]") and "%" in clean_line
+                            now = time.monotonic()
+                            if not is_frequent_progress or now - last_logged_progress_at >= 1.0:
+                                self.update_status_from_process_line(clean_line)
+                                self.log_line(clean_line)
+                                if is_frequent_progress:
+                                    last_logged_progress_at = now
+                    if self.stop_requested:
+                        break
+
+            if self.stop_requested:
+                self.terminate_current_process()
+
+            self.current_process.wait()
+            return self.current_process.returncode
+        finally:
+            self.last_process_output_lines = output_lines
+            self.active_progress_label = previous_progress_label
+            with self.process_lock:
+                self.current_process = None
+
+    def describe_command_for_log(self, command):
+        if not command:
+            return "nieznany"
+        executable = Path(str(command[0])).name.lower()
+        if "ffmpeg" in executable:
+            return "FFmpeg - przetwarzanie/kompresja pliku"
+        if "yt-dlp" in executable:
+            if any(arg in {"-U", "--update", "--update-to"} for arg in command):
+                return "yt-dlp - aktualizacja"
+            return "yt-dlp - pobieranie"
+        if "winget" in executable:
+            return "winget - instalacja/aktualizacja komponentu"
+        return Path(str(command[0])).name
+
+    def run_capture_command(self, command, timeout=None):
+        with self.process_lock:
+            self.current_process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                errors="replace",
+                shell=False,
+                env=get_process_environment(),
+                creationflags=no_window_creation_flags(),
+            )
+
+        try:
+            try:
+                stdout, stderr = self.current_process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                process = self.current_process
+                self.terminate_process_tree(process)
+                stdout, stderr = process.communicate()
+                stderr = (stderr or "") + "\nPrzekroczono limit czasu odczytu danych."
+                return 124, stdout or "", stderr
+            return self.current_process.returncode, stdout or "", stderr or ""
+        finally:
+            with self.process_lock:
+                self.current_process = None
+
+    def terminate_process_tree(self, process):
+        if not process or process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                # yt-dlp uruchamia FFmpeg jako proces potomny. Zwykłe terminate()
+                # kończyło tylko yt-dlp i pozostawiało FFmpeg w systemie.
+                subprocess.run(
+                    ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=no_window_creation_flags(),
+                    timeout=10,
+                    check=False,
+                )
+            else:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+        except Exception as exc:
+            self.log_line(f"Nie udało się zakończyć całego procesu: {exc}")
+            try:
+                process.kill()
+            except Exception:
+                pass
+
+    def reject_active_livestream(self, link, show_dialog=True):
+        self.set_status("Sprawdzam, czy materiał nie jest aktywną transmisją...")
+        command = [
+            resolve_tool_command("yt-dlp"),
+            "--dump-single-json",
+            "--skip-download",
+            "--no-warnings",
+            "--no-playlist",
+            "--playlist-items",
+            "1",
+            link,
+        ]
+        code, stdout, stderr = self.run_capture_command(command, timeout=30)
+        if self.stop_requested:
+            return True
+        if code != 0:
+            self.log_line("Nie udało się sprawdzić statusu transmisji; kontynuuję standardowo.")
+            if stderr.strip():
+                self.log_line(stderr.strip().splitlines()[-1])
+            return False
+        try:
+            info = json.loads(stdout)
+        except (TypeError, json.JSONDecodeError):
+            return False
+
+        is_active = info.get("is_live") is True or str(info.get("live_status") or "").lower() == "is_live"
+        if not is_active:
+            return False
+
+        self.set_status("Aktywna transmisja nie może zostać pobrana.")
+        self.log_line("Wykryto aktywny, niezakończony streaming. Pobieranie zostało zablokowane.")
+        if show_dialog:
+            self.after(
+                0,
+                lambda: self.show_info_dialog(
+                    "Aktywna transmisja",
+                    "Ten materiał jest trwającą transmisją na żywo.\n\n"
+                    "Program nie pobiera niezakończonych streamów. Spróbuj ponownie po zakończeniu transmisji, "
+                    "gdy materiał będzie dostępny jako zwykłe nagranie.",
+                ),
+            )
+        return True
+
+    def download_audio(self, link, folder, fmt, audio_quality, download_playlist, missing):
+        try:
+            if not self.ensure_components_installed(missing):
+                return
+
+            if self.stop_requested:
+                self.set_status("Pobieranie przerwane.")
+                return
+
+            if self.reject_active_livestream(link):
+                return
+
+            self.set_status("Pobieranie i konwersja audio...")
+            self.log_line("Start pobierania audio...")
+
+            output_template = os.path.join(folder, "%(title).200B.%(ext)s")
+            command = [
+                resolve_tool_command("yt-dlp"),
+                "--newline",
+                "--progress-delta",
+                "1",
+                "--no-keep-video",
+                "-x",
+                "--audio-format",
+                fmt,
+                "--audio-quality",
+                audio_quality,
+                "-o",
+                output_template,
+            ]
+
+            if not download_playlist:
+                # Obie opcje są celowe: --no-playlist wybiera film z linku typu
+                # watch?v=...&list=..., a --playlist-items 1 zabezpiecza link,
+                # który wskazuje wyłącznie stronę playlisty.
+                command.extend(["--no-playlist", "--playlist-items", "1"])
+
+            command.append(link)
+
+            self.log_line("Tryb: " + ("cała playlista" if download_playlist else "tylko pojedynczy utwór"))
+            self.log_line(f"Format audio: {fmt}, jakość: {audio_quality}")
+            code = self.run_download_command(command)
+
+            if self.stop_requested:
+                self.set_status("Pobieranie przerwane przez użytkownika.")
+                self.after(0, lambda: self.show_info_dialog("Przerwano", "Pobieranie zostało zatrzymane."))
+                return
+
+            if code == 0:
+                self.record_session_download()
+                self.set_status("Gotowe. Plik audio został zapisany w wybranym folderze.")
+                self.after(0, lambda: self.show_info_dialog("Gotowe", "Pobieranie i konwersja zakończone."))
+            else:
+                self.set_status("Wystąpił błąd podczas pobierania audio.")
+                error = self.classify_download_error()
+                self.log_line("Przyczyna: " + error["message"])
+                self.after(
+                    0,
+                    lambda: self.show_info_dialog(
+                        error["title"],
+                        error["message"],
+                    ),
+                )
+        finally:
+            self.set_busy(False)
+
+    def get_retry_referer(self, link):
+        try:
+            parsed = urlparse(link)
+        except Exception:
+            return ""
+        if not parsed.scheme or not parsed.netloc:
+            return ""
+        return f"{parsed.scheme}://{parsed.netloc}/"
+
+    def get_browser_retry_variants(self, link):
+        referer = self.get_retry_referer(link)
+        browser_options = [
+            "--user-agent",
+            BROWSER_RETRY_USER_AGENT,
+            "--add-header",
+            f"Accept-Language: {BROWSER_RETRY_ACCEPT_LANGUAGE}",
+            "--geo-bypass",
+        ]
+        if referer:
+            browser_options.extend(["--referer", referer])
+        return [
+            ("standardowo", []),
+            ("z naglowkami przegladarki", browser_options),
+        ]
+
+    def output_suggests_access_retry(self, output_lines):
+        output_text = chr(10).join(output_lines or []).lower()
+        retry_markers = [
+            "http error 410",
+            "http error 403",
+            "http error 429",
+            "unable to download webpage",
+            "forbidden",
+            "gone",
+            "not available in your country",
+            "geo",
+        ]
+        return any(marker in output_text for marker in retry_markers)
+
+    def build_arte_format_selector(self, arte_prefix, video_quality):
+        quality_to_height = {
+            "4K": 2160,
+            "1440p": 1440,
+            "1080p": 1080,
+            "720p": 720,
+            "480p": 480,
+            "360p": 360,
+        }
+        height = quality_to_height.get(video_quality)
+        height_limit = f"[height<={height}]" if height else ""
+        prefix_filter = f"[format_id^={arte_prefix}]"
+
+        if video_quality == "Mini":
+            return (
+                f"worstvideo{prefix_filter}[ext=mp4]+bestaudio{prefix_filter}/"
+                f"worstvideo{prefix_filter}+bestaudio{prefix_filter}/"
+                "worstvideo+bestaudio/"
+                "worst[vcodec!=none][acodec!=none]"
+            )
+
+        return (
+            f"bestvideo{prefix_filter}{height_limit}[vcodec^=avc][ext=mp4]+bestaudio{prefix_filter}/"
+            f"bestvideo{prefix_filter}{height_limit}[ext=mp4]+bestaudio{prefix_filter}/"
+            f"bestvideo{prefix_filter}{height_limit}+bestaudio{prefix_filter}/"
+            f"bestvideo{height_limit}+bestaudio/"
+            f"best{height_limit}[vcodec!=none][acodec!=none]"
+        )
+
+    def build_video_format_selector(self, video_format, video_quality, subtitle_info=None):
+        arte_prefix = ""
+        if subtitle_info:
+            arte_prefix = str(subtitle_info.get("arte_format_prefix") or "")
+        if arte_prefix:
+            return self.build_arte_format_selector(arte_prefix, video_quality)
+
+        quality_to_height = {
+            "4K": 2160,
+            "1440p": 1440,
+            "1080p": 1080,
+            "720p": 720,
+            "480p": 480,
+            "360p": 360,
+        }
+        if video_quality == "Mini":
+            if video_format == "mp4":
+                return (
+                    "worst[ext=mp4][height>0][protocol^=http]/"
+                    "worstvideo[vcodec!=none][ext=mp4]+worstaudio[acodec!=none][ext=m4a]/"
+                    "worst[vcodec!=none][acodec!=none][ext=mp4]/"
+                    "worstvideo[vcodec!=none]+worstaudio[acodec!=none]/"
+                    "worst[vcodec!=none][acodec!=none]"
+                )
+            if video_format == "webm":
+                return (
+                    "worst[ext=webm][height>0][protocol^=http]/"
+                    "worstvideo[vcodec!=none][ext=webm]+worstaudio[acodec!=none][ext=webm]/"
+                    "worst[vcodec!=none][acodec!=none][ext=webm]/"
+                    "worstvideo[vcodec!=none]+worstaudio[acodec!=none]/"
+                    "worst[vcodec!=none][acodec!=none]"
+                )
+            return (
+                "worst[height>0][protocol^=http]/"
+                "worstvideo[vcodec!=none]+worstaudio[acodec!=none]/"
+                "worst[vcodec!=none][acodec!=none]"
+            )
+
+        height = quality_to_height.get(video_quality)
+        height_limit = f"[height<={height}]" if height else ""
+
+        if video_format == "mp4":
+            return (
+                f"bestvideo{height_limit}[vcodec!=none][ext=mp4]+bestaudio[acodec!=none][ext=m4a]/"
+                f"best{height_limit}[ext=mp4][height>0][protocol^=http]/"
+                f"best{height_limit}[vcodec!=none][acodec!=none][ext=mp4]/"
+                f"bestvideo{height_limit}[vcodec!=none]+bestaudio[acodec!=none]/"
+                f"best{height_limit}[vcodec!=none][acodec!=none]"
+            )
+
+        if video_format == "webm":
+            return (
+                f"bestvideo{height_limit}[vcodec!=none][ext=webm]+bestaudio[acodec!=none][ext=webm]/"
+                f"best{height_limit}[ext=webm][height>0][protocol^=http]/"
+                f"best{height_limit}[vcodec!=none][acodec!=none][ext=webm]/"
+                f"bestvideo{height_limit}[vcodec!=none]+bestaudio[acodec!=none]/"
+                f"best{height_limit}[vcodec!=none][acodec!=none]"
+            )
+
+        return (
+            f"bestvideo{height_limit}[vcodec!=none]+bestaudio[acodec!=none]/"
+            f"best{height_limit}[height>0][protocol^=http]/"
+            f"best{height_limit}[vcodec!=none][acodec!=none]"
+        )
+
+    def build_video_command(
+        self, link, folder, video_format, video_quality, download_playlist, subtitle_info=None,
+        access_options=None, output_template=None
+    ):
+        output_template = output_template or os.path.join(folder, "%(title).200B.%(ext)s")
+        format_selector = self.build_video_format_selector(video_format, video_quality, subtitle_info)
+
+        # A direct media URL may be a perfectly valid video even when yt-dlp cannot
+        # determine its height or codecs before downloading it.  The strict
+        # selectors above intentionally reject incomplete formats, but they also
+        # rejected such direct MP4 files (for example Interia's CDN).  Keep the
+        # strict choices first and add a fallback only for an already discovered
+        # direct media URL.  validate_recent_video_download() still verifies that
+        # the resulting file contains decodable video and audio streams.
+        if self.is_direct_media_url(link):
+            fallback_choice = "worst" if video_quality == "Mini" else "best"
+            format_selector += f"/{fallback_choice}[ext={video_format}]/{fallback_choice}"
+
+        command = [
+            resolve_tool_command("yt-dlp"),
+            "--newline",
+            "--progress",
+            "--no-keep-video",
+            "--print",
+            "after_move:__VSDP_FILE_JSON__:%(filepath)j",
+            "--no-quiet",
+            "--no-simulate",
+        ]
+
+        command.extend(
+            [
+                "-f",
+                format_selector,
+                "--merge-output-format",
+                video_format,
+                "-o",
+                output_template,
+            ]
+        )
+
+        if video_format in {"mp4", "webm"}:
+            command.extend(["--recode-video", video_format])
+
+        self.append_subtitle_options(command, subtitle_info)
+
+        if access_options:
+            command.extend(access_options)
+
+        if not download_playlist:
+            command.extend(["--no-playlist", "--playlist-items", "1"])
+
+        command.append(link)
+        return command
+
+    def run_single_video_download(
+        self, link, folder, video_format, video_quality, download_playlist, subtitle_info=None,
+        access_options=None, output_template=None
+    ):
+        command = self.build_video_command(
+            link, folder, video_format, video_quality, download_playlist, subtitle_info, access_options,
+            output_template
+        )
+        return self.run_download_command(command)
+
+    def run_video_download_with_access_retries(
+        self, link, folder, video_format, video_quality, download_playlist, subtitle_info=None,
+        output_template=None
+    ):
+        variants = self.get_browser_retry_variants(link)
+        last_code = 1
+        for index, (label, access_options) in enumerate(variants):
+            if self.stop_requested:
+                return last_code
+            if index > 0:
+                self.log_line(f"Dostęp: ponawiam pobieranie {label}.")
+                self.set_status(f"Ponawiam pobieranie {label}...")
+            last_code = self.run_single_video_download(
+                link,
+                folder,
+                video_format,
+                video_quality,
+                download_playlist,
+                subtitle_info=subtitle_info,
+                access_options=access_options,
+                output_template=output_template,
+            )
+            if last_code == 0:
+                return 0
+            if not self.output_suggests_access_retry(self.last_process_output_lines):
+                return last_code
+        return last_code
+
+    def run_video_download_with_subtitle_fallback(
+        self, link, folder, video_format, video_quality, download_playlist, subtitle_info,
+        output_template=None
+    ):
+        code = self.run_video_download_with_access_retries(
+            link, folder, video_format, video_quality, download_playlist, subtitle_info=subtitle_info,
+            output_template=output_template,
+        )
+
+        if code == 0:
+            return (0 if self.validate_recent_video_download() else 1), subtitle_info
+
+        if self.stop_requested or not subtitle_info or not subtitle_info.get("found"):
+            return code, subtitle_info
+
+        self.log_line(
+            "Napisy: nie udało się pobrać lub zintegrować napisów. "
+            "Ponawiam pobieranie filmu bez napisów."
+        )
+        self.set_status("Napisy nie zadziałały. Pobieram film bez napisów...")
+
+        fallback_info = dict(subtitle_info)
+        fallback_info["subtitle_download_failed"] = True
+        fallback_code = self.run_video_download_with_access_retries(
+            link, folder, video_format, video_quality, download_playlist, subtitle_info=None,
+            output_template=output_template,
+        )
+
+        if fallback_code == 0:
+            return (0 if self.validate_recent_video_download() else 1), fallback_info
+
+        return code, subtitle_info
+
+    def resolve_playlist_entry_url(self, entry):
+        if not isinstance(entry, dict):
+            return None
+
+        for key in ("webpage_url", "original_url", "url"):
+            value = str(entry.get(key) or "").strip()
+            if value.startswith("http://") or value.startswith("https://"):
+                return value
+
+        entry_id = str(entry.get("id") or entry.get("url") or "").strip()
+        extractor = f"{entry.get('ie_key') or ''} {entry.get('extractor') or ''}".lower()
+        if not entry_id:
+            return None
+
+        if "youtube" in extractor or (len(entry_id) == 11 and " " not in entry_id):
+            return f"https://www.youtube.com/watch?v={entry_id}"
+
+        return entry_id
+
+    def read_playlist_entries(self, link):
+        self.set_status("Odczytuję playlistę...")
+        self.log_line("Odczytuję listę elementów playlisty...")
+
+        command = [
+            resolve_tool_command("yt-dlp"),
+            "--flat-playlist",
+            "--ignore-errors",
+            "--dump-single-json",
+            link,
+        ]
+        code, stdout, stderr = self.run_capture_command(command)
+
+        for line in stderr.splitlines()[-12:]:
+            clean_line = line.strip()
+            if clean_line:
+                self.log_line(clean_line)
+
+        if self.stop_requested:
+            return []
+
+        if code != 0:
+            self.log_line(f"Nie udało się odczytać playlisty. Kod błędu: {code}")
+            return []
+
+        try:
+            playlist_data = json.loads(stdout)
+        except json.JSONDecodeError as exc:
+            self.log_line(f"Nie udało się odczytać danych playlisty: {exc}")
+            return []
+
+        entries = []
+        for entry in playlist_data.get("entries") or []:
+            entry_url = self.resolve_playlist_entry_url(entry)
+            if entry_url:
+                entries.append(entry_url)
+
+        return entries
+
+    def download_video_playlist(self, link, folder, video_format, video_quality, missing, embed_subtitles):
+        completed = 0
+        failures = 0
+        failure_messages = []
+        subtitles_added = 0
+        subtitles_missing = 0
+
+        try:
+            if not self.ensure_components_installed(missing):
+                return
+
+            if self.stop_requested:
+                self.set_status("Pobieranie przerwane.")
+                return
+
+            entries = self.read_playlist_entries(link)
+            total = len(entries)
+
+            if self.stop_requested:
+                self.set_status("Pobieranie przerwane przez użytkownika.")
+                return
+
+            if total == 0:
+                self.set_status("Nie znaleziono elementów playlisty.")
+                self.after(
+                    0,
+                    lambda: self.show_info_dialog(
+                        "Błąd playlisty",
+                        "Nie udało się odczytać elementów playlisty. Sprawdź log.",
+                    ),
+                )
+                return
+
+            self.log_line(f"Znaleziono elementów playlisty: {total}")
+            self.log_line("Każdy film będzie scalony/konwertowany przed rozpoczęciem kolejnego.")
+            self.log_line("Pliki tymczasowe po poprawnej konwersji będą usuwane automatycznie.")
+
+            for index, entry_url in enumerate(entries, start=1):
+                if self.stop_requested:
+                    break
+
+                self.set_status(f"Playlista: pobieranie {index}/{total}...")
+                self.log_line("")
+                self.log_line(f"--- Element playlisty {index}/{total} ---")
+                self.log_line(f"Format wideo: {video_format}, jakość: {video_quality}")
+
+                subtitle_info = self.prepare_subtitles_for_video(entry_url, embed_subtitles)
+                code, subtitle_info = self.run_video_download_with_subtitle_fallback(
+                    entry_url,
+                    folder,
+                    video_format,
+                    video_quality,
+                    download_playlist=False,
+                    subtitle_info=subtitle_info,
+                )
+
+                if self.stop_requested:
+                    break
+
+                if code == 0:
+                    mini_result = None
+                    if video_quality == "Mini":
+                        mini_result = self.compress_recent_video_download_to_mini()
+                    if mini_result is not None and not mini_result.get("success"):
+                        failures += 1
+                        self.log_line(f"Błąd: element {index}/{total} nie został poprawnie skompresowany w trybie Mini.")
+                        continue
+
+                    completed += 1
+                    self.record_session_download()
+                    if subtitle_info.get("found") and not subtitle_info.get("subtitle_download_failed"):
+                        subtitles_added += 1
+                    elif subtitle_info.get("enabled"):
+                        subtitles_missing += 1
+                    self.cleanup_embedded_subtitle_files(subtitle_info)
+                    subtitle_message = self.format_subtitle_result(subtitle_info)
+                    if subtitle_message:
+                        self.log_line("Napisy: " + subtitle_message)
+                    self.log_line(f"OK: element {index}/{total} zakończony i przekonwertowany.")
+                else:
+                    failures += 1
+                    self.log_line(f"Błąd: element {index}/{total} zakończył się kodem {code}.")
+                    error = self.classify_download_error_with_formats(
+                        entry_url,
+                        video_format,
+                        video_quality,
+                    )
+                    failure_messages.append(error["message"])
+                    self.log_line("Przyczyna: " + error["message"])
+
+            if self.stop_requested:
+                self.set_status(f"Przerwano playlistę. Gotowe pliki: {completed}/{total}.")
+                self.after(
+                    0,
+                    lambda: self.show_info_dialog(
+                        "Przerwano",
+                        f"Pobieranie playlisty zostało zatrzymane.\n\n"
+                        f"Poprawnie zakończone pliki: {completed}/{total}.",
+                    ),
+                )
+                return
+
+            if failures == 0:
+                if embed_subtitles:
+                    self.log_line(
+                        f"Napisy scalone: {subtitles_added}. Bez napisów PL/EN: {subtitles_missing}."
+                    )
+                self.set_status(f"Gotowe. Playlista wideo zakończona: {completed}/{total}.")
+                self.after(0, lambda: self.show_info_dialog("Gotowe", "Pobieranie playlisty wideo zakończone."))
+            else:
+                self.set_status(f"Playlista zakończona z błędami. Gotowe: {completed}/{total}.")
+                failure_details = ""
+                if failure_messages:
+                    failure_details = "\n\n" + "\n\n".join(failure_messages[:3])
+                self.after(
+                    0,
+                    lambda: self.show_info_dialog(
+                        "Zakończono z błędami",
+                        f"Poprawnie pobrano: {completed}/{total}.\n"
+                        f"Błędy: {failures}. Szczegóły są w logu."
+                        f"{failure_details}",
+                    ),
+                )
+        finally:
+            self.set_busy(False)
+
+    def download_video(self, link, folder, video_format, video_quality, download_playlist, missing, embed_subtitles):
+        try:
+            if not self.ensure_components_installed(missing):
+                return
+
+            if self.reject_active_livestream(link):
+                return
+
+            if self.stop_requested:
+                self.set_status("Pobieranie przerwane.")
+                return
+
+            self.set_status("Pobieranie wideo...")
+            self.log_line("Start pobierania wideo...")
+
+            self.log_line("Tryb: " + ("cała playlista" if download_playlist else "tylko pojedynczy film"))
+            self.log_line(f"Format wideo: {video_format}, jakość: {video_quality}")
+            subtitle_info = self.prepare_subtitles_for_video(link, embed_subtitles)
+            if self.stop_requested:
+                self.set_status("Pobieranie przerwane przez użytkownika.")
+                return
+            code, subtitle_info = self.run_video_download_with_subtitle_fallback(
+                link, folder, video_format, video_quality, download_playlist, subtitle_info
+            )
+
+            if self.stop_requested:
+                self.set_status("Pobieranie przerwane przez użytkownika.")
+                self.after(0, lambda: self.show_info_dialog("Przerwano", "Pobieranie zostało zatrzymane."))
+                return
+
+            if code == 0:
+                mini_result = None
+                if video_quality == "Mini":
+                    mini_result = self.compress_recent_video_download_to_mini()
+                if mini_result is not None and not mini_result.get("success"):
+                    self.set_status("Mini: nie udało się skompresować pliku.")
+                    self.after(
+                        0,
+                        lambda: self.show_info_dialog(
+                            "Mini",
+                            "Nie udało się skompresować pliku Mini. Sprawdź log.",
+                        ),
+                    )
+                    return
+
+                self.cleanup_embedded_subtitle_files(subtitle_info)
+                self.record_session_download()
+                subtitle_message = self.format_subtitle_result(subtitle_info)
+                mini_message = self.format_mini_result_message(mini_result) if mini_result else ""
+                if subtitle_message:
+                    self.log_line("Napisy: " + subtitle_message)
+                    status_message = "Gotowe. Wideo zapisane. " + subtitle_message
+                    dialog_message = "Pobieranie wideo zakończone.\n\n" + subtitle_message
+                else:
+                    status_message = "Gotowe. Wideo zostało zapisane w wybranym folderze."
+                    dialog_message = "Pobieranie wideo zakończone."
+                if mini_message:
+                    status_message = mini_message
+                    dialog_message += "\n\n" + mini_message
+                self.set_status(status_message)
+                self.after(0, lambda: self.show_info_dialog("Gotowe", dialog_message))
+            else:
+                error = self.classify_download_error_with_formats(
+                    link,
+                    video_format,
+                    video_quality,
+                )
+                self.set_status(error.get("status_message", error["message"]))
+                self.log_line("Przyczyna: " + error["message"])
+                self.after(
+                    0,
+                    lambda: self.show_info_dialog(error["title"], error["message"]),
+                )
+        finally:
+            self.set_busy(False)
+
+    def terminate_current_process(self):
+        with self.process_lock:
+            process = self.current_process
+
+        if process and process.poll() is None:
+            self.terminate_process_tree(process)
+
+    def stop_download(self):
+        self.stop_requested = True
+        self.set_status("Zatrzymywanie pobierania...")
+        self.log_line("STOP: użytkownik przerwał pobieranie.")
+        self.stop_btn.configure(state="disabled")
+        threading.Thread(target=self.terminate_current_process, daemon=True).start()
+
+    def on_close(self):
+        if self.current_process and self.current_process.poll() is None:
+            answer = self.ask_yes_no_dialog(
+                "Proces trwa",
+                "Pobieranie lub instalacja nadal trwa. Czy zatrzymać proces i zamknąć program?",
+            )
+            if not answer:
+                return
+            self.stop_requested = True
+            self.terminate_current_process()
+
+        self.destroy()
+
+
+if __name__ == "__main__":
+    app = VideoDownloaderApp()
+    app.mainloop()

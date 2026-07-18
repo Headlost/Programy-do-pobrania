@@ -1,6 +1,6 @@
 # Bezpieczenstwo i transparentnosc
 
-Ten dokument opisuje, co wiadomo o publicznych wydaniach programu Video And Sound Downloader Pro publikowanych w tym repozytorium. Najnowsze wydanie opisane w plikach weryfikacyjnych to v7.0.7.
+Ten dokument opisuje, co wiadomo o publicznych wydaniach programu Video And Sound Downloader Pro publikowanych w tym repozytorium. Najnowsze wydanie opisane w plikach weryfikacyjnych to v8.0.8.
 
 ## Co robi program
 
@@ -12,26 +12,26 @@ Program:
 - zapisuje pobrane pliki w folderze wybranym przez uzytkownika,
 - uzywa FFmpeg do konwersji oraz scalania audio i wideo,
 - pokazuje logi pobierania w oknie programu,
-- w wersji v7.0.7 jest dostepny bez limitu czasu,
-- w wersji v7.0.7 udostepnia przelacznik jezyka PL/EN, tryby Mini oraz przycisk Fix do lokalnej naprawy lub aktualizacji yt-dlp,
+- w wersji v8.0.8 jest dostępny bezpłatnie i bez limitu czasu,
+- w wersji v8.0.8 udostępnia przełącznik języka PL/EN, tryby Mini, tryb WYKRYJ oraz przycisk Fix do lokalnej naprawy lub aktualizacji yt-dlp,
 - nie wymaga logowania do programu,
 - nie prosi o hasla do kont uzytkownika,
 - nie publikuje prywatnych plikow uzytkownika.
 
 ## Co zawiera publiczne repozytorium
 
-To repozytorium publikacyjne zawiera materialy pomocnicze do weryfikacji publicznych wydan. Dla v7.0.7 dodano rozszerzony snapshot kodu zrodlowego, aby ograniczyc ryzyko traktowania programu jako black box:
+To repozytorium publikacyjne zawiera materiały pomocnicze do weryfikacji publicznych wydań. Dla v8.0.8 dodano rozszerzony snapshot kodu źródłowego, aby ograniczyć ryzyko traktowania programu jako black box:
 
 - pliki EXE w sekcji Releases,
-- sumy kontrolne SHA256 plikow EXE i obrazow GUI,
-- rozszerzony kod zrodlowy v7.0.7 w `source-disclosure-v7.0.7`,
-- paczke ZIP z rozszerzonym kodem: `source-disclosure-v7.0.7.zip`,
-- starsze fragmenty rzeczywistego kodu programu pokazujace sposob uruchamiania yt-dlp,
-- obrazy pokazujace wyglad aplikacji dla danego wydania.
+- sumy kontrolne SHA-256 plików EXE i obrazów GUI,
+- rozszerzony kod źródłowy v8.0.8 w `source-disclosure-v8.0.8`,
+- paczkę ZIP z rozszerzonym kodem: `source-disclosure-v8.0.8.zip`,
+- skrócone fragmenty rzeczywistego kodu programu,
+- obrazy pokazujące wygląd aplikacji dla danego wydania.
 
 ## Co nie jest publikowane
 
-Publiczny snapshot v7.0.7 nie zawiera prywatnego materialu podpisu kodu, lokalnego certyfikatu `.cer`, lokalnych sciezek autora, gotowych plikow EXE ani katalogow budowania/cache. Miejsca zwiazane z podpisem i historycznym kodem triala sa w publicznym pliku oznaczone komentarzami.
+Publiczny snapshot v8.0.8 nie zawiera prywatnego materiału podpisu kodu, lokalnego certyfikatu `.cer`, lokalnych ścieżek autora, gotowych plików EXE ani katalogów budowania/cache. Miejsca związane z podpisem i historycznym kodem triala są w publicznym pliku oznaczone komentarzami.
 
 ## Jak sprawdzic pobrany plik
 
@@ -40,7 +40,7 @@ Po pobraniu pliku EXE mozna porownac jego sume SHA256 z plikiem `SHA256SUMS.txt`
 W PowerShell:
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Video_And_Sound_Downloader_Pro_v7.0.7.exe
+Get-FileHash -Algorithm SHA256 .\Video_And_Sound_Downloader_Pro_v8.0.8.exe
 ```
 
 Otrzymany hash powinien byc taki sam jak w `transparency/SHA256SUMS.txt`.
