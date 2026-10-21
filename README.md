@@ -2,6 +2,12 @@
 
 Publiczne repozytorium z wydaniami programu Video And Sound Downloader Pro.
 
+## Polityka prywatności / Privacy Policy
+
+[Polityka prywatności aplikacji — wersja polska i angielska](https://github.com/Headlost/Programy-do-pobrania/blob/main/PRIVACY_POLICY.md)
+
+[Application privacy policy — Polish and English](https://github.com/Headlost/Programy-do-pobrania/blob/main/PRIVACY_POLICY.md#english)
+
 Repozytorium zawiera:
 
 - gotowe wydania programu w sekcji Releases,
